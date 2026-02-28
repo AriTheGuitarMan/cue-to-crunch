@@ -1,5 +1,6 @@
 import { motion } from "framer-motion";
 import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { Zap } from "lucide-react";
 
 const prompts = [
@@ -13,6 +14,7 @@ const prompts = [
 const Hero = () => {
   const [currentPrompt, setCurrentPrompt] = useState(0);
   const [displayText, setDisplayText] = useState("");
+  const navigate = useNavigate();
 
   useEffect(() => {
     const prompt = prompts[currentPrompt];
@@ -94,8 +96,11 @@ const Hero = () => {
                   {displayText}
                   <span className="inline-block w-0.5 h-5 bg-primary ml-0.5 animate-pulse-glow align-middle" />
                 </span>
-                <button className="shrink-0 px-5 py-2 rounded-lg bg-primary text-primary-foreground font-semibold text-sm hover:brightness-110 transition-all">
-                  Generate
+                <button
+                  onClick={() => navigate("/studio")}
+                  className="shrink-0 px-5 py-2 rounded-lg bg-primary text-primary-foreground font-semibold text-sm hover:brightness-110 transition-all"
+                >
+                  Try Studio
                 </button>
               </div>
             </div>
