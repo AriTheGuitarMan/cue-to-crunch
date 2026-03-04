@@ -1,10 +1,20 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Upload, Play, Square, Zap, RotateCcw, Guitar } from "lucide-react";
+import { Upload, Play, Square, Zap, RotateCcw, Mic, FileAudio, Check, RefreshCw } from "lucide-react";
 import { parsePrompt, EffectParams, defaultParams } from "@/lib/effectPresets";
 import { loadAudioFile, createEngine, connectAndPlay, playDry, stopPlayback, destroyEngine, applyParams, AudioEngineState } from "@/lib/audioEngine";
 import Waveform from "@/components/studio/Waveform";
 import EffectKnobs from "@/components/studio/EffectKnobs";
+import LiveRecorder from "@/components/studio/LiveRecorder";
+import ValueSummary from "@/components/studio/ValueSummary";
+import DAWExport from "@/components/studio/DAWExport";
+import IterationHistory from "@/components/studio/IterationHistory";
+import StudioLayout from "@/components/studio/StudioLayout";
+import { useAuth } from "@/hooks/useAuth";
+import { supabase } from "@/integrations/supabase/client";
+import { calculateSavings } from "@/components/studio/ValueSummary";
+import { toast } from "sonner";
+import type { Tables } from "@/integrations/supabase/types";
 
 const promptSuggestions = [
   "warm blues tone with smooth reverb",
@@ -16,21 +26,35 @@ const promptSuggestions = [
 ];
 
 const Studio = () => {
+  const { user } = useAuth();
+  const [inputTab, setInputTab] = useState<"upload" | "record">("upload");
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [audioBuffer, setAudioBuffer] = useState<AudioBuffer | null>(null);
+  const [inputSource, setInputSource] = useState<"upload" | "recording">("upload");
   const [prompt, setPrompt] = useState("");
   const [params, setParams] = useState<EffectParams>(defaultParams);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playMode, setPlayMode] = useState<"wet" | "dry">("wet");
   const [isGenerated, setIsGenerated] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+
+  // Iterative generation state
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [iterationRound, setIterationRound] = useState(1);
+  const [iterations, setIterations] = useState<Tables<"sessions">[]>([]);
+  const [showRefine, setShowRefine] = useState(false);
+  const [refinementNote, setRefinementNote] = useState("");
+  const [previousParams, setPreviousParams] = useState<EffectParams | null>(null);
+  const [comparePlaying, setComparePlaying] = useState<"current" | "previous" | null>(null);
+
   const engineRef = useRef<AudioEngineState | null>(null);
+  const compareEngineRef = useRef<AudioEngineState | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (engineRef.current) destroyEngine(engineRef.current);
+      if (compareEngineRef.current) destroyEngine(compareEngineRef.current);
     };
   }, []);
 
@@ -42,8 +66,12 @@ const Studio = () => {
       setAudioBuffer(buffer);
       setIsGenerated(false);
       setParams(defaultParams);
+      setSessionId(null);
+      setIterationRound(1);
+      setIterations([]);
+      setShowRefine(false);
     } catch {
-      alert("Could not decode audio file. Please try a different file.");
+      toast.error("Could not decode audio file.");
     }
   }, []);
 
@@ -53,44 +81,148 @@ const Studio = () => {
     if (file && file.type.startsWith("audio/")) handleFileUpload(file);
   }, [handleFileUpload]);
 
-  const handleGenerate = useCallback(() => {
+  const handleRecordingComplete = useCallback(async (file: File) => {
+    setInputSource("recording");
+    setInputTab("upload");
+    await handleFileUpload(file);
+  }, [handleFileUpload]);
+
+  const saveSession = useCallback(async (
+    promptText: string,
+    effectParams: EffectParams,
+    round: number,
+    parentId: string | null,
+    refNote: string | null
+  ) => {
+    if (!user || !audioBuffer) return null;
+    const { timeSavedMinutes, moneySaved } = calculateSavings(audioBuffer.duration);
+
+    const { data, error } = await supabase.from("sessions").insert({
+      user_id: user.id,
+      prompt_text: promptText,
+      refinement_note: refNote,
+      input_source: inputSource,
+      duration_seconds: audioBuffer.duration,
+      time_saved_minutes: timeSavedMinutes,
+      money_saved: moneySaved,
+      iteration_round: round,
+      parent_session_id: parentId,
+      effect_params: effectParams as any,
+    }).select().single();
+
+    if (error) {
+      console.error("Save session error:", error);
+      return null;
+    }
+
+    // Update lifetime savings
+    await supabase.rpc("update_updated_at_column" as any); // trigger via profile update
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("lifetime_time_saved_minutes, lifetime_money_saved")
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    if (profile) {
+      await supabase.from("profiles").update({
+        lifetime_time_saved_minutes: profile.lifetime_time_saved_minutes + timeSavedMinutes,
+        lifetime_money_saved: profile.lifetime_money_saved + moneySaved,
+      }).eq("user_id", user.id);
+    }
+
+    // Save to knowledge base
+    const tags = promptText.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+    await supabase.from("knowledge_base").insert({
+      user_id: user.id,
+      session_id: data.id,
+      summary: `${promptText}${refNote ? ` → ${refNote}` : ""}`,
+      tags: tags.slice(0, 10),
+    });
+
+    return data;
+  }, [user, audioBuffer, inputSource]);
+
+  const handleGenerate = useCallback(async () => {
     if (!prompt.trim()) return;
     setIsGenerating(true);
-    // Simulate brief processing
-    setTimeout(() => {
+
+    setTimeout(async () => {
       const newParams = parsePrompt(prompt);
       setParams(newParams);
       setIsGenerated(true);
       setIsGenerating(false);
-      // If engine exists and playing, apply live
+
+      if (engineRef.current && isPlaying) {
+        applyParams(engineRef.current, newParams);
+      }
+
+      // Save to DB
+      const session = await saveSession(prompt, newParams, 1, null, null);
+      if (session) {
+        setSessionId(session.id);
+        setIterationRound(1);
+        setIterations([session]);
+      }
+    }, 600);
+  }, [prompt, isPlaying, saveSession]);
+
+  const handleRefine = useCallback(async () => {
+    if (!refinementNote.trim() || iterationRound >= 5) return;
+    setIsGenerating(true);
+
+    setTimeout(async () => {
+      setPreviousParams(params);
+      const combinedPrompt = `${prompt} — refinement: ${refinementNote}`;
+      const newParams = parsePrompt(combinedPrompt);
+      setParams(newParams);
+      setIsGenerating(false);
+
+      const newRound = iterationRound + 1;
+      setIterationRound(newRound);
+
+      const session = await saveSession(prompt, newParams, newRound, sessionId, refinementNote);
+      if (session) {
+        setIterations((prev) => [...prev, session]);
+        setSessionId(session.id);
+      }
+
+      setRefinementNote("");
+      setShowRefine(false);
+
       if (engineRef.current && isPlaying) {
         applyParams(engineRef.current, newParams);
       }
     }, 600);
-  }, [prompt, isPlaying]);
+  }, [refinementNote, iterationRound, params, prompt, sessionId, isPlaying, saveSession]);
 
   const handlePlay = useCallback((mode: "wet" | "dry") => {
     if (!audioBuffer) return;
-    // Stop current
     if (engineRef.current) stopPlayback(engineRef.current);
-
-    // Create fresh engine
     const engine = createEngine(audioBuffer);
     engineRef.current = engine;
-
     const source = mode === "wet" ? connectAndPlay(engine, params) : playDry(engine);
     setIsPlaying(true);
     setPlayMode(mode);
-
-    source.onended = () => {
-      setIsPlaying(false);
-    };
+    source.onended = () => setIsPlaying(false);
   }, [audioBuffer, params]);
 
   const handleStop = useCallback(() => {
     if (engineRef.current) stopPlayback(engineRef.current);
     setIsPlaying(false);
   }, []);
+
+  const handleComparePlay = useCallback((version: "current" | "previous") => {
+    if (!audioBuffer || !previousParams) return;
+    if (compareEngineRef.current) destroyEngine(compareEngineRef.current);
+    if (engineRef.current) stopPlayback(engineRef.current);
+
+    const engine = createEngine(audioBuffer);
+    compareEngineRef.current = engine;
+    const p = version === "current" ? params : previousParams;
+    const source = connectAndPlay(engine, p);
+    setComparePlaying(version);
+    source.onended = () => setComparePlaying(null);
+  }, [audioBuffer, params, previousParams]);
 
   const handleParamsChange = useCallback((newParams: EffectParams) => {
     setParams(newParams);
@@ -100,75 +232,85 @@ const Studio = () => {
   }, [isPlaying, playMode]);
 
   return (
-    <div className="min-h-screen bg-background">
-      {/* Nav */}
-      <nav className="fixed top-0 left-0 right-0 z-50 bg-background/60 backdrop-blur-xl border-b border-border/50">
-        <div className="container px-6 h-14 flex items-center justify-between">
-          <a href="/" className="flex items-center gap-2">
-            <Guitar className="w-5 h-5 text-primary" />
-            <span className="font-bold text-foreground">ToneForge</span>
-          </a>
-          <span className="text-xs font-mono text-muted-foreground">STUDIO</span>
-        </div>
-      </nav>
-
-      <main className="container px-6 pt-24 pb-16 max-w-4xl mx-auto space-y-8">
-        {/* Step 1: Upload Audio */}
-        <motion.section
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-        >
+    <StudioLayout>
+      <div className="px-6 py-8 max-w-4xl mx-auto space-y-8">
+        {/* Step 1: Input */}
+        <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
           <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
             1. Load your audio
           </h2>
-          <div
-            onDrop={handleDrop}
-            onDragOver={(e) => e.preventDefault()}
-            onClick={() => fileInputRef.current?.click()}
-            className={`relative border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-all hover:border-primary/50 ${
-              audioFile ? "border-primary/30 bg-accent/10" : "border-border"
-            }`}
-          >
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="audio/*"
-              className="hidden"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) handleFileUpload(file);
-              }}
-            />
-            {audioFile ? (
-              <div className="flex items-center justify-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
-                  <Upload className="w-5 h-5 text-primary" />
-                </div>
-                <div className="text-left">
-                  <p className="font-medium text-foreground">{audioFile.name}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {audioBuffer && `${audioBuffer.duration.toFixed(1)}s · ${audioBuffer.sampleRate}Hz · ${audioBuffer.numberOfChannels}ch`}
-                  </p>
-                </div>
-              </div>
-            ) : (
-              <>
-                <Upload className="w-8 h-8 text-muted-foreground mx-auto mb-3" />
-                <p className="text-muted-foreground">Drop an audio file here or click to browse</p>
-                <p className="text-xs text-muted-foreground/60 mt-1">WAV, MP3, FLAC, OGG supported</p>
-              </>
-            )}
+
+          {/* Tabs */}
+          <div className="flex gap-1 mb-3">
+            <button
+              onClick={() => setInputTab("upload")}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                inputTab === "upload" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <FileAudio className="w-4 h-4" /> Upload File
+            </button>
+            <button
+              onClick={() => setInputTab("record")}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                inputTab === "record" ? "bg-destructive text-destructive-foreground" : "bg-muted text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <Mic className="w-4 h-4" /> Record Live
+            </button>
           </div>
+
+          {inputTab === "upload" ? (
+            <div
+              onDrop={handleDrop}
+              onDragOver={(e) => e.preventDefault()}
+              onClick={() => fileInputRef.current?.click()}
+              className={`relative border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-all hover:border-primary/50 ${
+                audioFile ? "border-primary/30 bg-accent/10" : "border-border"
+              }`}
+            >
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="audio/*"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) { setInputSource("upload"); handleFileUpload(file); }
+                }}
+              />
+              {audioFile ? (
+                <div className="flex items-center justify-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
+                    <Upload className="w-5 h-5 text-primary" />
+                  </div>
+                  <div className="text-left">
+                    <p className="font-medium text-foreground">{audioFile.name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {audioBuffer && `${audioBuffer.duration.toFixed(1)}s · ${audioBuffer.sampleRate}Hz · ${audioBuffer.numberOfChannels}ch`}
+                      {inputSource === "recording" && " · Live Recording"}
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <Upload className="w-8 h-8 text-muted-foreground mx-auto mb-3" />
+                  <p className="text-muted-foreground">Drop an audio file here or click to browse</p>
+                  <p className="text-xs text-muted-foreground/60 mt-1">WAV, MP3, FLAC, OGG supported</p>
+                </>
+              )}
+            </div>
+          ) : (
+            <div className="bg-glass rounded-2xl p-6">
+              <LiveRecorder onRecordingComplete={handleRecordingComplete} />
+            </div>
+          )}
         </motion.section>
 
         {/* Step 2: Prompt */}
         <AnimatePresence>
           {audioFile && (
-            <motion.section
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0 }}
-            >
+            <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
               <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
                 2. Describe your tone
               </h2>
@@ -192,8 +334,6 @@ const Studio = () => {
                   </button>
                 </div>
               </div>
-
-              {/* Suggestions */}
               <div className="flex flex-wrap gap-2 mt-3">
                 {promptSuggestions.map((s) => (
                   <button
@@ -223,36 +363,23 @@ const Studio = () => {
                   3. Preview & fine-tune
                 </h2>
 
-                {/* Waveform */}
                 <div className="bg-glass rounded-2xl p-4 mb-4">
-                  <Waveform
-                    analyser={engineRef.current?.analyser ?? null}
-                    isPlaying={isPlaying}
-                  />
+                  <Waveform analyser={engineRef.current?.analyser ?? null} isPlaying={isPlaying} />
                 </div>
 
                 {/* Playback controls */}
                 <div className="flex items-center gap-3 flex-wrap">
                   {!isPlaying ? (
                     <>
-                      <button
-                        onClick={() => handlePlay("wet")}
-                        className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-primary text-primary-foreground font-semibold text-sm hover:brightness-110 transition-all"
-                      >
+                      <button onClick={() => handlePlay("wet")} className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-primary text-primary-foreground font-semibold text-sm hover:brightness-110 transition-all">
                         <Play className="w-4 h-4" /> Play with Effects
                       </button>
-                      <button
-                        onClick={() => handlePlay("dry")}
-                        className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-muted text-foreground font-semibold text-sm hover:bg-muted/80 transition-all"
-                      >
+                      <button onClick={() => handlePlay("dry")} className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-muted text-foreground font-semibold text-sm hover:bg-muted/80 transition-all">
                         <Play className="w-4 h-4" /> Play Dry (A/B)
                       </button>
                     </>
                   ) : (
-                    <button
-                      onClick={handleStop}
-                      className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-destructive text-destructive-foreground font-semibold text-sm hover:brightness-110 transition-all"
-                    >
+                    <button onClick={handleStop} className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-destructive text-destructive-foreground font-semibold text-sm hover:brightness-110 transition-all">
                       <Square className="w-4 h-4" /> Stop
                     </button>
                   )}
@@ -261,14 +388,91 @@ const Studio = () => {
                       Playing: {playMode === "wet" ? "With Effects" : "Dry Signal"}
                     </span>
                   )}
-                  <button
-                    onClick={() => { setParams(defaultParams); setIsGenerated(false); setPrompt(""); }}
-                    className="ml-auto flex items-center gap-2 px-4 py-2 rounded-xl bg-muted/50 text-muted-foreground text-sm hover:text-foreground transition-colors"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5" /> Reset
-                  </button>
                 </div>
               </div>
+
+              {/* Iterative generation controls */}
+              <div className="flex items-center gap-3 flex-wrap">
+                <button
+                  onClick={() => { setShowRefine(false); toast.success("Tone saved! 🎸"); }}
+                  className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-primary/20 text-primary font-semibold text-sm hover:bg-primary/30 transition-all border border-primary/30"
+                >
+                  <Check className="w-4 h-4" /> This is perfect
+                </button>
+                {iterationRound < 5 && (
+                  <button
+                    onClick={() => setShowRefine(!showRefine)}
+                    className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-secondary/20 text-secondary font-semibold text-sm hover:bg-secondary/30 transition-all border border-secondary/30"
+                  >
+                    <RefreshCw className="w-4 h-4" /> Refine it ({5 - iterationRound} left)
+                  </button>
+                )}
+                <button
+                  onClick={() => { setParams(defaultParams); setIsGenerated(false); setPrompt(""); setSessionId(null); setIterations([]); setIterationRound(1); setShowRefine(false); setPreviousParams(null); }}
+                  className="ml-auto flex items-center gap-2 px-4 py-2 rounded-xl bg-muted/50 text-muted-foreground text-sm hover:text-foreground transition-colors"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" /> Reset
+                </button>
+              </div>
+
+              {/* Refinement input */}
+              <AnimatePresence>
+                {showRefine && (
+                  <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}>
+                    <div className="bg-glass rounded-2xl p-1">
+                      <div className="flex items-center gap-3 bg-background/80 rounded-xl px-4 py-3">
+                        <RefreshCw className="w-5 h-5 text-secondary shrink-0" />
+                        <input
+                          type="text"
+                          value={refinementNote}
+                          onChange={(e) => setRefinementNote(e.target.value)}
+                          onKeyDown={(e) => e.key === "Enter" && handleRefine()}
+                          placeholder="e.g. make it more percussive, add breakdown at 0:45"
+                          className="flex-1 bg-transparent text-foreground font-mono text-sm outline-none placeholder:text-muted-foreground/50"
+                        />
+                        <button
+                          onClick={handleRefine}
+                          disabled={!refinementNote.trim() || isGenerating}
+                          className="shrink-0 px-5 py-2 rounded-lg bg-secondary text-secondary-foreground font-semibold text-sm hover:brightness-110 transition-all disabled:opacity-40"
+                        >
+                          {isGenerating ? "Refining..." : "Refine"}
+                        </button>
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {/* Side-by-side comparison */}
+              {previousParams && (
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    onClick={() => handleComparePlay("previous")}
+                    className={`p-3 rounded-xl border text-sm font-medium transition-all ${
+                      comparePlaying === "previous" ? "border-muted-foreground bg-muted/50" : "border-border hover:border-muted-foreground/50"
+                    }`}
+                  >
+                    <Play className="w-3 h-3 inline mr-1" />
+                    Previous Version
+                  </button>
+                  <button
+                    onClick={() => handleComparePlay("current")}
+                    className={`p-3 rounded-xl border text-sm font-medium transition-all ${
+                      comparePlaying === "current" ? "border-primary bg-primary/10" : "border-border hover:border-primary/50"
+                    }`}
+                  >
+                    <Play className="w-3 h-3 inline mr-1" />
+                    New Version
+                  </button>
+                </div>
+              )}
+
+              {/* Iteration history */}
+              <IterationHistory
+                iterations={iterations}
+                currentRound={iterationRound}
+                onSelectIteration={() => {}}
+              />
 
               {/* Effect knobs */}
               <div>
@@ -277,11 +481,17 @@ const Studio = () => {
                 </h3>
                 <EffectKnobs params={params} onChange={handleParamsChange} />
               </div>
+
+              {/* Value Summary */}
+              <ValueSummary durationSeconds={audioBuffer.duration} />
+
+              {/* DAW Export */}
+              <DAWExport audioBuffer={audioBuffer} fileName={audioFile?.name ?? "output"} />
             </motion.section>
           )}
         </AnimatePresence>
-      </main>
-    </div>
+      </div>
+    </StudioLayout>
   );
 };
 
