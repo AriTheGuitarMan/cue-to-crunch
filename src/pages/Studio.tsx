@@ -116,7 +116,6 @@ const Studio = () => {
     }
 
     // Update lifetime savings
-    await supabase.rpc("update_updated_at_column" as any); // trigger via profile update
     const { data: profile } = await supabase
       .from("profiles")
       .select("lifetime_time_saved_minutes, lifetime_money_saved")
