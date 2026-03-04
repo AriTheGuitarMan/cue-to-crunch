@@ -14,7 +14,133 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      knowledge_base: {
+        Row: {
+          created_at: string
+          id: string
+          session_id: string | null
+          summary: string | null
+          tags: string[] | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          session_id?: string | null
+          summary?: string | null
+          tags?: string[] | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          session_id?: string | null
+          summary?: string | null
+          tags?: string[] | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "knowledge_base_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      profiles: {
+        Row: {
+          avatar_url: string | null
+          created_at: string
+          display_name: string | null
+          id: string
+          lifetime_money_saved: number
+          lifetime_time_saved_minutes: number
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          avatar_url?: string | null
+          created_at?: string
+          display_name?: string | null
+          id?: string
+          lifetime_money_saved?: number
+          lifetime_time_saved_minutes?: number
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          avatar_url?: string | null
+          created_at?: string
+          display_name?: string | null
+          id?: string
+          lifetime_money_saved?: number
+          lifetime_time_saved_minutes?: number
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      sessions: {
+        Row: {
+          created_at: string
+          duration_seconds: number | null
+          effect_params: Json | null
+          id: string
+          input_audio_url: string | null
+          input_source: string
+          iteration_round: number
+          money_saved: number | null
+          output_audio_url: string | null
+          parent_session_id: string | null
+          prompt_text: string
+          refinement_note: string | null
+          time_saved_minutes: number | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          duration_seconds?: number | null
+          effect_params?: Json | null
+          id?: string
+          input_audio_url?: string | null
+          input_source?: string
+          iteration_round?: number
+          money_saved?: number | null
+          output_audio_url?: string | null
+          parent_session_id?: string | null
+          prompt_text: string
+          refinement_note?: string | null
+          time_saved_minutes?: number | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          duration_seconds?: number | null
+          effect_params?: Json | null
+          id?: string
+          input_audio_url?: string | null
+          input_source?: string
+          iteration_round?: number
+          money_saved?: number | null
+          output_audio_url?: string | null
+          parent_session_id?: string | null
+          prompt_text?: string
+          refinement_note?: string | null
+          time_saved_minutes?: number | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sessions_parent_session_id_fkey"
+            columns: ["parent_session_id"]
+            isOneToOne: false
+            referencedRelation: "sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
