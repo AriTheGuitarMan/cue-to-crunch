@@ -133,7 +133,7 @@ const StudioKnowledge = () => {
                         {outputRounds.map((round) => (
                           <div key={round.id} className="rounded-lg border border-secondary/20 bg-background/40 p-2">
                             <p className="text-[10px] text-secondary mb-1 font-medium">
-                              Output File · Round {round.iteration_round}: {round.outputAudioUrl ? displayNameFromAudioUrl(round.outputAudioUrl) : "output"}
+                              Output File · Remix v{round.iteration_round}: {round.outputAudioUrl ? displayNameFromAudioUrl(round.outputAudioUrl) : "output"}
                               {round.isLegacyFallback ? " (legacy)" : ""}
                             </p>
                             {round.outputAudioUrl && (

@@ -164,8 +164,7 @@ const Studio = () => {
   const [iterations, setIterations] = useState<Tables<"sessions">[]>([]);
   const [showRefine, setShowRefine] = useState(false);
   const [refinementNote, setRefinementNote] = useState("");
-  const [previousParams, setPreviousParams] = useState<EffectParams | null>(null);
-  const [comparePlaying, setComparePlaying] = useState<"current" | "previous" | null>(null);
+  const [comparePlayingId, setComparePlayingId] = useState<string | null>(null);
   const [loadedSessionLabel, setLoadedSessionLabel] = useState<string | null>(null);
   const [sessionAudioUrl, setSessionAudioUrl] = useState<string | null>(null);
 
@@ -254,8 +253,22 @@ const Studio = () => {
 
       const { data: allSessions } = await supabase
         .from("sessions")
-        .select("id, parent_session_id, input_audio_url, created_at")
+        .select("*")
         .eq("user_id", user.id);
+      const byId = new Map((allSessions ?? []).map((s) => [s.id, s]));
+      const getRootId = (session: Tables<"sessions">) => {
+        let cursor: Tables<"sessions"> | undefined = session;
+        let guard = 0;
+        while (cursor?.parent_session_id && guard < 25) {
+          cursor = byId.get(cursor.parent_session_id);
+          guard++;
+        }
+        return cursor?.id ?? session.id;
+      };
+      const rootId = getRootId(data as Tables<"sessions">);
+      const chain = (allSessions ?? [])
+        .filter((s) => getRootId(s as Tables<"sessions">) === rootId)
+        .sort((a, b) => a.iteration_round - b.iteration_round);
       const audioUrlToLoad = resolveInputAudioUrlForSession(
         data as unknown as SessionAudioRef,
         (allSessions as SessionAudioRef[]) ?? [],
@@ -265,7 +278,7 @@ const Studio = () => {
       setPrompt(data.prompt_text);
       setIterationRound(data.iteration_round);
       setGenerationMode("modify");
-      setIterations([data]);
+      setIterations(chain as Tables<"sessions">[]);
       setInputSource((data.input_source as "upload" | "recording") ?? "upload");
       setSessionAudioUrl(audioUrlToLoad);
       if (data.effect_params) {
@@ -436,7 +449,6 @@ const Studio = () => {
     setIsGenerating(true);
 
     setTimeout(async () => {
-      setPreviousParams(params);
       const newParams = refineParamsFromPrompt(params, refinementNote);
       setParams(newParams);
       setIsGenerating(false);
@@ -475,18 +487,17 @@ const Studio = () => {
     setIsPlaying(false);
   }, []);
 
-  const handleComparePlay = useCallback((version: "current" | "previous") => {
-    if (!audioBuffer || !previousParams) return;
+  const handleCompareIterationPlay = useCallback((iteration: Tables<"sessions">) => {
+    if (!audioBuffer || !iteration.effect_params) return;
     if (compareEngineRef.current) destroyEngine(compareEngineRef.current);
     if (engineRef.current) stopPlayback(engineRef.current);
 
     const engine = createEngine(audioBuffer);
     compareEngineRef.current = engine;
-    const p = version === "current" ? params : previousParams;
-    const source = connectAndPlay(engine, p);
-    setComparePlaying(version);
-    source.onended = () => setComparePlaying(null);
-  }, [audioBuffer, params, previousParams]);
+    const source = connectAndPlay(engine, iteration.effect_params as unknown as EffectParams);
+    setComparePlayingId(iteration.id);
+    source.onended = () => setComparePlayingId(null);
+  }, [audioBuffer]);
 
   const handleParamsChange = useCallback((newParams: EffectParams) => {
     setParams(newParams);
@@ -497,14 +508,15 @@ const Studio = () => {
 
   const handleSelectIteration = useCallback((iteration: Tables<"sessions">) => {
     if (iteration.effect_params) {
-      setPreviousParams(params);
       setParams(iteration.effect_params as unknown as EffectParams);
     }
     setIterationRound(iteration.iteration_round);
     setSessionId(iteration.id);
+    setPrompt(iteration.prompt_text);
     if (iteration.refinement_note) setRefinementNote(iteration.refinement_note);
-    toast.success(`Loaded round ${iteration.iteration_round}`);
-  }, [params]);
+    setLoadedSessionLabel(`Selected Remix v${iteration.iteration_round}`);
+    toast.success(`Loaded Remix v${iteration.iteration_round}`);
+  }, []);
 
   return (
     <StudioLayout>
@@ -660,6 +672,9 @@ const Studio = () => {
                 <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
                   3. Preview & fine-tune
                 </h2>
+                <p className="text-xs text-secondary font-medium mb-3">
+                  Active Version: Remix v{iterationRound}
+                </p>
 
                 <div className="bg-glass rounded-2xl p-4 mb-4">
                   <Waveform analyser={engineRef.current?.analyser ?? null} isPlaying={isPlaying} />
@@ -706,7 +721,7 @@ const Studio = () => {
                   </button>
                 )}
                 <button
-                  onClick={() => { setParams(defaultParams); setIsGenerated(false); setPrompt(""); setSessionId(null); setIterations([]); setIterationRound(1); setShowRefine(false); setPreviousParams(null); setLoadedSessionLabel(null); }}
+                  onClick={() => { setParams(defaultParams); setIsGenerated(false); setPrompt(""); setSessionId(null); setIterations([]); setIterationRound(1); setShowRefine(false); setLoadedSessionLabel(null); }}
                   className="w-full sm:w-auto sm:ml-auto justify-center flex items-center gap-2 px-4 py-2 rounded-xl bg-muted/50 text-muted-foreground text-sm hover:text-foreground transition-colors"
                 >
                   <RotateCcw className="w-3.5 h-3.5" /> Reset
@@ -754,27 +769,26 @@ const Studio = () => {
                 )}
               </AnimatePresence>
 
-              {/* Side-by-side comparison */}
-              {previousParams && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <button
-                    onClick={() => handleComparePlay("previous")}
-                    className={`p-3 rounded-xl border text-sm font-medium transition-all ${
-                      comparePlaying === "previous" ? "border-muted-foreground bg-muted/50" : "border-border hover:border-muted-foreground/50"
-                    }`}
-                  >
-                    <Play className="w-3 h-3 inline mr-1" />
-                    Previous Version
-                  </button>
-                  <button
-                    onClick={() => handleComparePlay("current")}
-                    className={`p-3 rounded-xl border text-sm font-medium transition-all ${
-                      comparePlaying === "current" ? "border-primary bg-primary/10" : "border-border hover:border-primary/50"
-                    }`}
-                  >
-                    <Play className="w-3 h-3 inline mr-1" />
-                    New Version
-                  </button>
+              {/* Compare any remix version */}
+              {iterations.length > 1 && (
+                <div className="space-y-2">
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Compare Remix Versions
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {iterations.map((iter) => (
+                      <button
+                        key={iter.id}
+                        onClick={() => handleCompareIterationPlay(iter)}
+                        className={`p-3 rounded-xl border text-sm font-medium transition-all text-left ${
+                          comparePlayingId === iter.id ? "border-secondary bg-secondary/10" : "border-border hover:border-secondary/50"
+                        }`}
+                      >
+                        <Play className="w-3 h-3 inline mr-1" />
+                        Play Remix v{iter.iteration_round}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
 

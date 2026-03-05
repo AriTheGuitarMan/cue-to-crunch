@@ -19,7 +19,7 @@ const IterationHistory = ({ iterations, currentRound, onSelectIteration }: Itera
         onClick={() => setOpen(!open)}
         className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium text-foreground hover:bg-muted/30 transition-colors"
       >
-        <span>Iteration History ({iterations.length} rounds)</span>
+        <span>Remix Versions ({iterations.length})</span>
         {open ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
       </button>
 
@@ -35,7 +35,7 @@ const IterationHistory = ({ iterations, currentRound, onSelectIteration }: Itera
             >
               <div className="flex items-center justify-between">
                 <span className="text-xs font-semibold text-foreground">
-                  Round {iter.iteration_round}
+                  Remix v{iter.iteration_round}
                 </span>
                 <span className="text-[10px] text-muted-foreground font-mono">
                   {new Date(iter.created_at).toLocaleTimeString()}
