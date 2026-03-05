@@ -42,6 +42,66 @@ function extractStoragePathFromPublicUrl(url: string) {
   return decodeURIComponent(url.slice(idx + marker.length));
 }
 
+function sanitizeFileStem(name: string) {
+  return name
+    .replace(/\.[^.]+$/, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9-_]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 64) || "audio";
+}
+
+function fileNameFromUrl(url: string) {
+  const parts = decodeURIComponent(url).split("/");
+  return parts[parts.length - 1] || "session-audio.webm";
+}
+
+function audioBufferToWavBytes(buffer: AudioBuffer): ArrayBuffer {
+  const numChannels = buffer.numberOfChannels;
+  const sampleRate = buffer.sampleRate;
+  const bitsPerSample = 24;
+  const bytesPerSample = bitsPerSample / 8;
+  const blockAlign = numChannels * bytesPerSample;
+  const length = buffer.length;
+  const dataSize = length * blockAlign;
+  const bufferSize = 44 + dataSize;
+  const wav = new ArrayBuffer(bufferSize);
+  const view = new DataView(wav);
+
+  const writeString = (offset: number, str: string) => {
+    for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+  };
+
+  writeString(0, "RIFF");
+  view.setUint32(4, bufferSize - 8, true);
+  writeString(8, "WAVE");
+  writeString(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * blockAlign, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitsPerSample, true);
+  writeString(36, "data");
+  view.setUint32(40, dataSize, true);
+
+  let offset = 44;
+  for (let i = 0; i < length; i++) {
+    for (let ch = 0; ch < numChannels; ch++) {
+      const sample = Math.max(-1, Math.min(1, buffer.getChannelData(ch)[i]));
+      const intSample = Math.floor(sample * 8388607);
+      view.setUint8(offset, intSample & 0xff);
+      view.setUint8(offset + 1, (intSample >> 8) & 0xff);
+      view.setUint8(offset + 2, (intSample >> 16) & 0xff);
+      offset += 3;
+    }
+  }
+
+  return wav;
+}
+
 type SessionAudioRef = {
   id: string;
   parent_session_id: string | null;
@@ -171,7 +231,11 @@ const Studio = () => {
           ? "ogg"
           : "webm";
 
-    return new File([blob], `session-restore.${extension}`, { type: blob.type || "audio/webm" });
+    const rawName = fileNameFromUrl(url);
+    const restoredName = rawName.includes("__")
+      ? rawName.split("__").slice(1).join("__")
+      : rawName.replace(/^\d+-/, "");
+    return new File([blob], restoredName, { type: blob.type || "audio/webm" });
   }, []);
 
   useEffect(() => {
@@ -245,8 +309,8 @@ const Studio = () => {
     if (!user || !audioFile) return null;
     if (sessionAudioUrl) return sessionAudioUrl;
 
-    const extension = audioFile.name.split(".").pop() || "webm";
-    const filePath = `${user.id}/inputs/${Date.now()}-${Math.random().toString(36).slice(2)}.${extension}`;
+    const originalName = audioFile.name.replace(/[\\/]/g, "_");
+    const filePath = `${user.id}/inputs/${Date.now()}__${originalName}`;
     const { error } = await supabase.storage.from("audio-files").upload(filePath, audioFile, {
       contentType: audioFile.type || "audio/webm",
       upsert: false,
@@ -261,6 +325,24 @@ const Studio = () => {
     return data.publicUrl;
   }, [user, audioFile, sessionAudioUrl]);
 
+  const ensureOutputAudioUrl = useCallback(async (round: number) => {
+    if (!user || !audioBuffer) return null;
+    const inputStem = audioFile ? sanitizeFileStem(audioFile.name) : "output";
+    const wavBytes = audioBufferToWavBytes(audioBuffer);
+    const outputBlob = new Blob([wavBytes], { type: "audio/wav" });
+    const outputFilePath = `${user.id}/outputs/${Date.now()}-${inputStem}-round-${round}.wav`;
+    const { error } = await supabase.storage.from("audio-files").upload(outputFilePath, outputBlob, {
+      contentType: "audio/wav",
+      upsert: false,
+    });
+    if (error) {
+      console.error("Output audio upload failed:", error);
+      return null;
+    }
+    const { data } = supabase.storage.from("audio-files").getPublicUrl(outputFilePath);
+    return data.publicUrl;
+  }, [user, audioBuffer, audioFile]);
+
   const saveSession = useCallback(async (
     promptText: string,
     effectParams: EffectParams,
@@ -270,6 +352,7 @@ const Studio = () => {
   ) => {
     if (!user || !audioBuffer) return null;
     const inputAudioUrl = await ensureInputAudioUrl();
+    const outputAudioUrl = await ensureOutputAudioUrl(round);
     const { timeSavedMinutes, moneySaved } = calculateSavings(audioBuffer.duration, {
       params: effectParams,
       iterationRound: round,
@@ -282,6 +365,7 @@ const Studio = () => {
       refinement_note: refNote,
       input_source: inputSource,
       input_audio_url: inputAudioUrl,
+      output_audio_url: outputAudioUrl,
       duration_seconds: audioBuffer.duration,
       time_saved_minutes: timeSavedMinutes,
       money_saved: moneySaved,
@@ -319,7 +403,7 @@ const Studio = () => {
     });
 
     return data;
-  }, [user, audioBuffer, inputSource, generationMode, ensureInputAudioUrl]);
+  }, [user, audioBuffer, inputSource, generationMode, ensureInputAudioUrl, ensureOutputAudioUrl]);
 
   const handleGenerate = useCallback(async () => {
     if (!prompt.trim()) return;

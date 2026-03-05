@@ -11,7 +11,14 @@ const StudioKnowledge = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
   const [entries, setEntries] = useState<Tables<"knowledge_base">[]>([]);
+  const [sessions, setSessions] = useState<Tables<"sessions">[]>([]);
   const [loading, setLoading] = useState(true);
+
+  const displayNameFromAudioUrl = (url: string) => {
+    const raw = decodeURIComponent(url.split("/").pop() || "audio");
+    const withOriginalMarker = raw.includes("__") ? raw.split("__").slice(1).join("__") : raw;
+    return withOriginalMarker.replace(/^\d+-/, "");
+  };
 
   useEffect(() => {
     if (!user) return;
@@ -24,7 +31,25 @@ const StudioKnowledge = () => {
         setEntries(data ?? []);
         setLoading(false);
       });
+    supabase
+      .from("sessions")
+      .select("*")
+      .eq("user_id", user.id)
+      .then(({ data }) => {
+        setSessions(data ?? []);
+      });
   }, [user]);
+
+  const byId = new Map(sessions.map((s) => [s.id, s]));
+  const getRootId = (session: Tables<"sessions">) => {
+    let cursor: Tables<"sessions"> | undefined = session;
+    let guard = 0;
+    while (cursor?.parent_session_id && guard < 25) {
+      cursor = byId.get(cursor.parent_session_id);
+      guard++;
+    }
+    return cursor?.id ?? session.id;
+  };
 
   return (
     <StudioLayout>
@@ -47,6 +72,17 @@ const StudioKnowledge = () => {
         ) : (
           <div className="space-y-3">
             {entries.map((entry) => (
+              (() => {
+                const anchor = entry.session_id ? byId.get(entry.session_id) : undefined;
+                const rootId = anchor ? getRootId(anchor) : null;
+                const chain = rootId
+                  ? sessions
+                    .filter((s) => getRootId(s) === rootId)
+                    .sort((a, b) => a.iteration_round - b.iteration_round)
+                  : [];
+                const inputAudioUrl = chain.find((s) => !!s.input_audio_url)?.input_audio_url ?? null;
+                const outputRounds = chain.filter((s) => !!s.output_audio_url);
+                return (
               <motion.div
                 key={entry.id}
                 initial={{ opacity: 0, y: 10 }}
@@ -70,7 +106,38 @@ const StudioKnowledge = () => {
                 <p className="text-[10px] text-muted-foreground mt-2 font-mono">
                   {new Date(entry.created_at).toLocaleString()}
                 </p>
+                {(inputAudioUrl || outputRounds.length > 0) && (
+                  <div className="mt-3 pt-3 border-t border-border/40 space-y-2" onClick={(e) => e.stopPropagation()}>
+                    {inputAudioUrl && (
+                      <div>
+                        <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
+                          Input: {displayNameFromAudioUrl(inputAudioUrl)}
+                        </p>
+                        <audio controls src={inputAudioUrl} className="w-full h-9" />
+                      </div>
+                    )}
+                    {outputRounds.length > 0 && (
+                      <div className="space-y-1.5">
+                        <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                          Outputs ({outputRounds.length})
+                        </p>
+                        {outputRounds.map((round) => (
+                          <div key={round.id}>
+                            <p className="text-[10px] text-muted-foreground mb-1">
+                              Round {round.iteration_round}: {round.output_audio_url ? displayNameFromAudioUrl(round.output_audio_url) : "output"}
+                            </p>
+                            {round.output_audio_url && (
+                              <audio controls src={round.output_audio_url} className="w-full h-9" />
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </motion.div>
+                );
+              })()
             ))}
           </div>
         )}

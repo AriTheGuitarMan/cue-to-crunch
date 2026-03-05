@@ -7,6 +7,12 @@ import { supabase } from "@/integrations/supabase/client";
 import type { Tables } from "@/integrations/supabase/types";
 import { useNavigate } from "react-router-dom";
 
+function displayNameFromAudioUrl(url: string) {
+  const raw = decodeURIComponent(url.split("/").pop() || "audio");
+  const withOriginalMarker = raw.includes("__") ? raw.split("__").slice(1).join("__") : raw;
+  return withOriginalMarker.replace(/^\d+-/, "");
+}
+
 const StudioHistory = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -36,6 +42,16 @@ const StudioHistory = () => {
 
   // Group by parent_session_id (root sessions)
   const rootSessions = sessions.filter((s) => s.iteration_round === 1);
+  const byId = new Map(sessions.map((s) => [s.id, s]));
+  const getRootId = (session: Tables<"sessions">) => {
+    let cursor: Tables<"sessions"> | undefined = session;
+    let guard = 0;
+    while (cursor?.parent_session_id && guard < 25) {
+      cursor = byId.get(cursor.parent_session_id);
+      guard++;
+    }
+    return cursor?.id ?? session.id;
+  };
 
   return (
     <StudioLayout>
@@ -65,9 +81,12 @@ const StudioHistory = () => {
         ) : (
           <div className="space-y-3">
             {rootSessions.map((session) => {
-              const iterationCount = sessions.filter(
-                (s) => s.parent_session_id === session.id || s.id === session.id
-              ).length;
+              const chain = sessions
+                .filter((s) => getRootId(s) === session.id)
+                .sort((a, b) => a.iteration_round - b.iteration_round);
+              const iterationCount = chain.length;
+              const inputAudioUrl = chain.find((s) => !!s.input_audio_url)?.input_audio_url ?? null;
+              const outputRounds = chain.filter((s) => !!s.output_audio_url);
 
               return (
                 <motion.div
@@ -114,6 +133,35 @@ const StudioHistory = () => {
                       )}
                     </div>
                   </div>
+                  {(inputAudioUrl || outputRounds.length > 0) && (
+                    <div className="mt-3 pt-3 border-t border-border/40 space-y-2" onClick={(e) => e.stopPropagation()}>
+                      {inputAudioUrl && (
+                        <div>
+                          <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
+                            Input: {displayNameFromAudioUrl(inputAudioUrl)}
+                          </p>
+                          <audio controls src={inputAudioUrl} className="w-full h-9" />
+                        </div>
+                      )}
+                      {outputRounds.length > 0 && (
+                        <div className="space-y-1.5">
+                          <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                            Outputs ({outputRounds.length})
+                          </p>
+                          {outputRounds.map((round) => (
+                            <div key={round.id}>
+                              <p className="text-[10px] text-muted-foreground mb-1">
+                                Round {round.iteration_round}: {round.output_audio_url ? displayNameFromAudioUrl(round.output_audio_url) : "output"}
+                              </p>
+                              {round.output_audio_url && (
+                                <audio controls src={round.output_audio_url} className="w-full h-9" />
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </motion.div>
               );
             })}
