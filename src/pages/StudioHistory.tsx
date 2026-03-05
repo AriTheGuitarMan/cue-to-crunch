@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { Search, Clock, DollarSign, RefreshCw } from "lucide-react";
+import { Search, Clock, DollarSign, RefreshCw, Upload, Sparkles } from "lucide-react";
 import StudioLayout from "@/components/studio/StudioLayout";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
@@ -136,22 +136,24 @@ const StudioHistory = () => {
                   {(inputAudioUrl || outputRounds.length > 0) && (
                     <div className="mt-3 pt-3 border-t border-border/40 space-y-2" onClick={(e) => e.stopPropagation()}>
                       {inputAudioUrl && (
-                        <div>
-                          <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
-                            Input: {displayNameFromAudioUrl(inputAudioUrl)}
+                        <div className="rounded-xl border border-primary/30 bg-primary/5 p-2.5">
+                          <p className="text-[10px] uppercase tracking-wider text-primary font-semibold mb-1 flex items-center gap-1">
+                            <Upload className="w-3 h-3" />
+                            Input File: {displayNameFromAudioUrl(inputAudioUrl)}
                           </p>
                           <audio controls src={inputAudioUrl} className="w-full h-9" />
                         </div>
                       )}
                       {outputRounds.length > 0 && (
-                        <div className="space-y-1.5">
-                          <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                        <div className="space-y-2 rounded-xl border border-secondary/30 bg-secondary/5 p-2.5">
+                          <p className="text-[10px] uppercase tracking-wider text-secondary font-semibold flex items-center gap-1">
+                            <Sparkles className="w-3 h-3" />
                             Outputs ({outputRounds.length})
                           </p>
                           {outputRounds.map((round) => (
-                            <div key={round.id}>
-                              <p className="text-[10px] text-muted-foreground mb-1">
-                                Round {round.iteration_round}: {round.output_audio_url ? displayNameFromAudioUrl(round.output_audio_url) : "output"}
+                            <div key={round.id} className="rounded-lg border border-secondary/20 bg-background/40 p-2">
+                              <p className="text-[10px] text-secondary mb-1 font-medium">
+                                Output File · Round {round.iteration_round}: {round.output_audio_url ? displayNameFromAudioUrl(round.output_audio_url) : "output"}
                               </p>
                               {round.output_audio_url && (
                                 <audio controls src={round.output_audio_url} className="w-full h-9" />
