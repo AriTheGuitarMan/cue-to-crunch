@@ -86,7 +86,14 @@ const StudioHistory = () => {
                 .sort((a, b) => a.iteration_round - b.iteration_round);
               const iterationCount = chain.length;
               const inputAudioUrl = chain.find((s) => !!s.input_audio_url)?.input_audio_url ?? null;
-              const outputRounds = chain.filter((s) => !!s.output_audio_url);
+              const outputRounds = chain
+                .filter((s) => !!s.output_audio_url || !!s.input_audio_url)
+                .map((s) => ({
+                  id: s.id,
+                  iteration_round: s.iteration_round,
+                  outputAudioUrl: s.output_audio_url ?? s.input_audio_url,
+                  isLegacyFallback: !s.output_audio_url,
+                }));
 
               return (
                 <motion.div
@@ -153,10 +160,11 @@ const StudioHistory = () => {
                           {outputRounds.map((round) => (
                             <div key={round.id} className="rounded-lg border border-secondary/20 bg-background/40 p-2">
                               <p className="text-[10px] text-secondary mb-1 font-medium">
-                                Output File · Round {round.iteration_round}: {round.output_audio_url ? displayNameFromAudioUrl(round.output_audio_url) : "output"}
+                                Output File · Round {round.iteration_round}: {round.outputAudioUrl ? displayNameFromAudioUrl(round.outputAudioUrl) : "output"}
+                                {round.isLegacyFallback ? " (legacy)" : ""}
                               </p>
-                              {round.output_audio_url && (
-                                <audio controls src={round.output_audio_url} className="w-full h-9" />
+                              {round.outputAudioUrl && (
+                                <audio controls src={round.outputAudioUrl} className="w-full h-9" />
                               )}
                             </div>
                           ))}
