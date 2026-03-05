@@ -59,6 +59,7 @@ const Studio = () => {
   const [previousParams, setPreviousParams] = useState<EffectParams | null>(null);
   const [comparePlaying, setComparePlaying] = useState<"current" | "previous" | null>(null);
   const [loadedSessionLabel, setLoadedSessionLabel] = useState<string | null>(null);
+  const [sessionAudioUrl, setSessionAudioUrl] = useState<string | null>(null);
 
   const engineRef = useRef<AudioEngineState | null>(null);
   const compareEngineRef = useRef<AudioEngineState | null>(null);
@@ -71,47 +72,78 @@ const Studio = () => {
     };
   }, []);
 
-  useEffect(() => {
-    const loadSessionId = searchParams.get("loadSession");
-    if (!user || !loadSessionId) return;
-    supabase
-      .from("sessions")
-      .select("*")
-      .eq("user_id", user.id)
-      .eq("id", loadSessionId)
-      .maybeSingle()
-      .then(({ data }) => {
-        if (!data) return;
-        setSessionId(data.id);
-        setPrompt(data.prompt_text);
-        setIterationRound(data.iteration_round);
-        setGenerationMode("modify");
-        setIterations([data]);
-        if (data.effect_params) {
-          setParams(data.effect_params as unknown as EffectParams);
-        }
-        setLoadedSessionLabel(`Loaded session from ${new Date(data.created_at).toLocaleString()}`);
-        toast.success("Generation loaded. Upload audio to continue tweaking.");
-      });
-  }, [searchParams, user]);
-
-  const handleFileUpload = useCallback(async (file: File) => {
+  const handleFileUpload = useCallback(async (file: File, options?: { preserveSession?: boolean }) => {
     try {
       if (engineRef.current) destroyEngine(engineRef.current);
       const buffer = await loadAudioFile(file);
       setAudioFile(file);
       setAudioBuffer(buffer);
-      setIsGenerated(false);
-      if (!sessionId) {
+      if (options?.preserveSession) {
+        setIsGenerated(true);
+      } else {
+        setIsGenerated(false);
+        setSessionId(null);
         setParams(defaultParams);
         setIterationRound(1);
         setIterations([]);
+        setLoadedSessionLabel(null);
+        setSessionAudioUrl(null);
       }
       setShowRefine(false);
     } catch {
       toast.error("Could not decode audio file.");
     }
-  }, [sessionId]);
+  }, []);
+
+  useEffect(() => {
+    const loadSessionId = searchParams.get("loadSession");
+    if (!user || !loadSessionId) return;
+    let cancelled = false;
+
+    const loadSessionWithAudio = async () => {
+      const { data } = await supabase
+        .from("sessions")
+        .select("*")
+        .eq("user_id", user.id)
+        .eq("id", loadSessionId)
+        .maybeSingle();
+      if (!data || cancelled) return;
+
+      setSessionId(data.id);
+      setPrompt(data.prompt_text);
+      setIterationRound(data.iteration_round);
+      setGenerationMode("modify");
+      setIterations([data]);
+      setInputSource((data.input_source as "upload" | "recording") ?? "upload");
+      setSessionAudioUrl(data.input_audio_url);
+      if (data.effect_params) {
+        setParams(data.effect_params as unknown as EffectParams);
+      }
+      setLoadedSessionLabel(`Loaded session from ${new Date(data.created_at).toLocaleString()}`);
+
+      if (data.input_audio_url) {
+        try {
+          const response = await fetch(data.input_audio_url);
+          if (!response.ok) throw new Error("Audio fetch failed");
+          const blob = await response.blob();
+          const extension = blob.type.includes("wav") ? "wav" : blob.type.includes("mpeg") ? "mp3" : "webm";
+          const file = new File([blob], `session-${data.id}.${extension}`, { type: blob.type || "audio/webm" });
+          await handleFileUpload(file, { preserveSession: true });
+          if (!cancelled) toast.success("Generation loaded with source audio.");
+        } catch (error) {
+          console.error("Could not restore session audio:", error);
+          if (!cancelled) toast.error("Session loaded, but source audio could not be restored.");
+        }
+      } else {
+        toast.info("Session loaded. Upload audio to continue tweaking.");
+      }
+    };
+
+    loadSessionWithAudio();
+    return () => {
+      cancelled = true;
+    };
+  }, [searchParams, user, handleFileUpload]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -125,6 +157,26 @@ const Studio = () => {
     await handleFileUpload(file);
   }, [handleFileUpload]);
 
+  const ensureInputAudioUrl = useCallback(async () => {
+    if (!user || !audioFile) return null;
+    if (sessionAudioUrl) return sessionAudioUrl;
+
+    const extension = audioFile.name.split(".").pop() || "webm";
+    const filePath = `${user.id}/inputs/${Date.now()}-${Math.random().toString(36).slice(2)}.${extension}`;
+    const { error } = await supabase.storage.from("audio-files").upload(filePath, audioFile, {
+      contentType: audioFile.type || "audio/webm",
+      upsert: false,
+    });
+    if (error) {
+      console.error("Input audio upload failed:", error);
+      return null;
+    }
+
+    const { data } = supabase.storage.from("audio-files").getPublicUrl(filePath);
+    setSessionAudioUrl(data.publicUrl);
+    return data.publicUrl;
+  }, [user, audioFile, sessionAudioUrl]);
+
   const saveSession = useCallback(async (
     promptText: string,
     effectParams: EffectParams,
@@ -133,6 +185,7 @@ const Studio = () => {
     refNote: string | null
   ) => {
     if (!user || !audioBuffer) return null;
+    const inputAudioUrl = await ensureInputAudioUrl();
     const { timeSavedMinutes, moneySaved } = calculateSavings(audioBuffer.duration, {
       params: effectParams,
       iterationRound: round,
@@ -144,6 +197,7 @@ const Studio = () => {
       prompt_text: promptText,
       refinement_note: refNote,
       input_source: inputSource,
+      input_audio_url: inputAudioUrl,
       duration_seconds: audioBuffer.duration,
       time_saved_minutes: timeSavedMinutes,
       money_saved: moneySaved,
@@ -181,7 +235,7 @@ const Studio = () => {
     });
 
     return data;
-  }, [user, audioBuffer, inputSource, generationMode]);
+  }, [user, audioBuffer, inputSource, generationMode, ensureInputAudioUrl]);
 
   const handleGenerate = useCallback(async () => {
     if (!prompt.trim()) return;
