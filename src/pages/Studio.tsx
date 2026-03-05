@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Upload, Play, Square, Zap, RotateCcw, Mic, FileAudio, Check, RefreshCw } from "lucide-react";
-import { parsePrompt, EffectParams, defaultParams } from "@/lib/effectPresets";
+import { parsePrompt, refineParamsFromPrompt, EffectParams, defaultParams } from "@/lib/effectPresets";
 import { loadAudioFile, createEngine, connectAndPlay, playDry, stopPlayback, destroyEngine, applyParams, AudioEngineState } from "@/lib/audioEngine";
 import Waveform from "@/components/studio/Waveform";
 import EffectKnobs from "@/components/studio/EffectKnobs";
@@ -15,6 +15,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { calculateSavings } from "@/components/studio/ValueSummary";
 import { toast } from "sonner";
 import type { Tables } from "@/integrations/supabase/types";
+import { useSearchParams } from "react-router-dom";
 
 const promptSuggestions = [
   "warm blues tone with smooth reverb",
@@ -25,12 +26,23 @@ const promptSuggestions = [
   "classic rock overdrive",
 ];
 
+const refinementSuggestions = [
+  "make it brighter and more punchy",
+  "add wider stereo space",
+  "tighter low end, less muddiness",
+  "more saturation, less reverb tail",
+  "smoother highs and softer attack",
+  "make it more aggressive in the mids",
+];
+
 const Studio = () => {
   const { user } = useAuth();
+  const [searchParams] = useSearchParams();
   const [inputTab, setInputTab] = useState<"upload" | "record">("upload");
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [audioBuffer, setAudioBuffer] = useState<AudioBuffer | null>(null);
   const [inputSource, setInputSource] = useState<"upload" | "recording">("upload");
+  const [generationMode, setGenerationMode] = useState<"fresh" | "modify">("fresh");
   const [prompt, setPrompt] = useState("");
   const [params, setParams] = useState<EffectParams>(defaultParams);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -46,6 +58,7 @@ const Studio = () => {
   const [refinementNote, setRefinementNote] = useState("");
   const [previousParams, setPreviousParams] = useState<EffectParams | null>(null);
   const [comparePlaying, setComparePlaying] = useState<"current" | "previous" | null>(null);
+  const [loadedSessionLabel, setLoadedSessionLabel] = useState<string | null>(null);
 
   const engineRef = useRef<AudioEngineState | null>(null);
   const compareEngineRef = useRef<AudioEngineState | null>(null);
@@ -58,6 +71,30 @@ const Studio = () => {
     };
   }, []);
 
+  useEffect(() => {
+    const loadSessionId = searchParams.get("loadSession");
+    if (!user || !loadSessionId) return;
+    supabase
+      .from("sessions")
+      .select("*")
+      .eq("user_id", user.id)
+      .eq("id", loadSessionId)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (!data) return;
+        setSessionId(data.id);
+        setPrompt(data.prompt_text);
+        setIterationRound(data.iteration_round);
+        setGenerationMode("modify");
+        setIterations([data]);
+        if (data.effect_params) {
+          setParams(data.effect_params as unknown as EffectParams);
+        }
+        setLoadedSessionLabel(`Loaded session from ${new Date(data.created_at).toLocaleString()}`);
+        toast.success("Generation loaded. Upload audio to continue tweaking.");
+      });
+  }, [searchParams, user]);
+
   const handleFileUpload = useCallback(async (file: File) => {
     try {
       if (engineRef.current) destroyEngine(engineRef.current);
@@ -65,15 +102,16 @@ const Studio = () => {
       setAudioFile(file);
       setAudioBuffer(buffer);
       setIsGenerated(false);
-      setParams(defaultParams);
-      setSessionId(null);
-      setIterationRound(1);
-      setIterations([]);
+      if (!sessionId) {
+        setParams(defaultParams);
+        setIterationRound(1);
+        setIterations([]);
+      }
       setShowRefine(false);
     } catch {
       toast.error("Could not decode audio file.");
     }
-  }, []);
+  }, [sessionId]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -95,7 +133,11 @@ const Studio = () => {
     refNote: string | null
   ) => {
     if (!user || !audioBuffer) return null;
-    const { timeSavedMinutes, moneySaved } = calculateSavings(audioBuffer.duration);
+    const { timeSavedMinutes, moneySaved } = calculateSavings(audioBuffer.duration, {
+      params: effectParams,
+      iterationRound: round,
+      mode: generationMode,
+    });
 
     const { data, error } = await supabase.from("sessions").insert({
       user_id: user.id,
@@ -107,7 +149,7 @@ const Studio = () => {
       money_saved: moneySaved,
       iteration_round: round,
       parent_session_id: parentId,
-      effect_params: effectParams as any,
+      effect_params: effectParams,
     }).select().single();
 
     if (error) {
@@ -139,14 +181,16 @@ const Studio = () => {
     });
 
     return data;
-  }, [user, audioBuffer, inputSource]);
+  }, [user, audioBuffer, inputSource, generationMode]);
 
   const handleGenerate = useCallback(async () => {
     if (!prompt.trim()) return;
     setIsGenerating(true);
 
     setTimeout(async () => {
-      const newParams = parsePrompt(prompt);
+      const newParams = generationMode === "modify"
+        ? refineParamsFromPrompt(params, prompt)
+        : parsePrompt(prompt);
       setParams(newParams);
       setIsGenerated(true);
       setIsGenerating(false);
@@ -163,7 +207,7 @@ const Studio = () => {
         setIterations([session]);
       }
     }, 600);
-  }, [prompt, isPlaying, saveSession]);
+  }, [prompt, isPlaying, saveSession, generationMode, params]);
 
   const handleRefine = useCallback(async () => {
     if (!refinementNote.trim() || iterationRound >= 5) return;
@@ -171,8 +215,7 @@ const Studio = () => {
 
     setTimeout(async () => {
       setPreviousParams(params);
-      const combinedPrompt = `${prompt} — refinement: ${refinementNote}`;
-      const newParams = parsePrompt(combinedPrompt);
+      const newParams = refineParamsFromPrompt(params, refinementNote);
       setParams(newParams);
       setIsGenerating(false);
 
@@ -229,6 +272,17 @@ const Studio = () => {
       applyParams(engineRef.current, newParams);
     }
   }, [isPlaying, playMode]);
+
+  const handleSelectIteration = useCallback((iteration: Tables<"sessions">) => {
+    if (iteration.effect_params) {
+      setPreviousParams(params);
+      setParams(iteration.effect_params as unknown as EffectParams);
+    }
+    setIterationRound(iteration.iteration_round);
+    setSessionId(iteration.id);
+    if (iteration.refinement_note) setRefinementNote(iteration.refinement_note);
+    toast.success(`Loaded round ${iteration.iteration_round}`);
+  }, [params]);
 
   return (
     <StudioLayout>
@@ -308,11 +362,16 @@ const Studio = () => {
 
         {/* Step 2: Prompt */}
         <AnimatePresence>
-          {audioFile && (
+          {(audioFile || loadedSessionLabel) && (
             <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
               <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
                 2. Describe your tone
               </h2>
+              {loadedSessionLabel && (
+                <div className="mb-3 text-xs rounded-lg bg-primary/10 text-primary px-3 py-2">
+                  {loadedSessionLabel}
+                </div>
+              )}
               <div className="bg-glass rounded-2xl p-1 glow-primary">
                 <div className="flex items-center gap-3 bg-background/80 rounded-xl px-4 py-3">
                   <Zap className="w-5 h-5 text-primary shrink-0" />
@@ -343,6 +402,24 @@ const Studio = () => {
                     {s}
                   </button>
                 ))}
+              </div>
+              <div className="mt-3 flex items-center gap-2 text-xs">
+                <button
+                  onClick={() => setGenerationMode("fresh")}
+                  className={`px-3 py-1.5 rounded-full transition-colors ${
+                    generationMode === "fresh" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
+                  }`}
+                >
+                  Start From Fresh Chain
+                </button>
+                <button
+                  onClick={() => setGenerationMode("modify")}
+                  className={`px-3 py-1.5 rounded-full transition-colors ${
+                    generationMode === "modify" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
+                  }`}
+                >
+                  Modify Existing Chain
+                </button>
               </div>
             </motion.section>
           )}
@@ -407,7 +484,7 @@ const Studio = () => {
                   </button>
                 )}
                 <button
-                  onClick={() => { setParams(defaultParams); setIsGenerated(false); setPrompt(""); setSessionId(null); setIterations([]); setIterationRound(1); setShowRefine(false); setPreviousParams(null); }}
+                  onClick={() => { setParams(defaultParams); setIsGenerated(false); setPrompt(""); setSessionId(null); setIterations([]); setIterationRound(1); setShowRefine(false); setPreviousParams(null); setLoadedSessionLabel(null); }}
                   className="ml-auto flex items-center gap-2 px-4 py-2 rounded-xl bg-muted/50 text-muted-foreground text-sm hover:text-foreground transition-colors"
                 >
                   <RotateCcw className="w-3.5 h-3.5" /> Reset
@@ -418,24 +495,37 @@ const Studio = () => {
               <AnimatePresence>
                 {showRefine && (
                   <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}>
-                    <div className="bg-glass rounded-2xl p-1">
-                      <div className="flex items-center gap-3 bg-background/80 rounded-xl px-4 py-3">
-                        <RefreshCw className="w-5 h-5 text-secondary shrink-0" />
-                        <input
-                          type="text"
-                          value={refinementNote}
-                          onChange={(e) => setRefinementNote(e.target.value)}
-                          onKeyDown={(e) => e.key === "Enter" && handleRefine()}
-                          placeholder="e.g. make it more percussive, add breakdown at 0:45"
-                          className="flex-1 bg-transparent text-foreground font-mono text-sm outline-none placeholder:text-muted-foreground/50"
-                        />
-                        <button
-                          onClick={handleRefine}
-                          disabled={!refinementNote.trim() || isGenerating}
-                          className="shrink-0 px-5 py-2 rounded-lg bg-secondary text-secondary-foreground font-semibold text-sm hover:brightness-110 transition-all disabled:opacity-40"
-                        >
-                          {isGenerating ? "Refining..." : "Refine"}
-                        </button>
+                    <div className="space-y-3">
+                      <div className="bg-glass rounded-2xl p-1">
+                        <div className="flex items-center gap-3 bg-background/80 rounded-xl px-4 py-3">
+                          <RefreshCw className="w-5 h-5 text-secondary shrink-0" />
+                          <input
+                            type="text"
+                            value={refinementNote}
+                            onChange={(e) => setRefinementNote(e.target.value)}
+                            onKeyDown={(e) => e.key === "Enter" && handleRefine()}
+                            placeholder="e.g. make it more percussive, add breakdown at 0:45"
+                            className="flex-1 bg-transparent text-foreground font-mono text-sm outline-none placeholder:text-muted-foreground/50"
+                          />
+                          <button
+                            onClick={handleRefine}
+                            disabled={!refinementNote.trim() || isGenerating}
+                            className="shrink-0 px-5 py-2 rounded-lg bg-secondary text-secondary-foreground font-semibold text-sm hover:brightness-110 transition-all disabled:opacity-40"
+                          >
+                            {isGenerating ? "Refining..." : "Refine"}
+                          </button>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {refinementSuggestions.map((s) => (
+                          <button
+                            key={s}
+                            onClick={() => setRefinementNote(s)}
+                            className="text-xs px-3 py-1.5 rounded-full bg-muted text-muted-foreground hover:text-foreground hover:bg-muted/80 transition-colors"
+                          >
+                            {s}
+                          </button>
+                        ))}
                       </div>
                     </div>
                   </motion.div>
@@ -470,7 +560,7 @@ const Studio = () => {
               <IterationHistory
                 iterations={iterations}
                 currentRound={iterationRound}
-                onSelectIteration={() => {}}
+                onSelectIteration={handleSelectIteration}
               />
 
               {/* Effect knobs */}
@@ -482,7 +572,12 @@ const Studio = () => {
               </div>
 
               {/* Value Summary */}
-              <ValueSummary durationSeconds={audioBuffer.duration} />
+              <ValueSummary
+                durationSeconds={audioBuffer.duration}
+                params={params}
+                iterationRound={iterationRound}
+                mode={generationMode}
+              />
 
               {/* DAW Export */}
               <DAWExport audioBuffer={audioBuffer} fileName={audioFile?.name ?? "output"} />

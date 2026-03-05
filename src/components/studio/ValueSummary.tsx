@@ -1,23 +1,61 @@
 import { Clock, DollarSign, Share2 } from "lucide-react";
 import { toast } from "sonner";
+import type { EffectParams } from "@/lib/effectPresets";
 
 interface ValueSummaryProps {
   durationSeconds: number;
+  params?: EffectParams;
+  iterationRound?: number;
+  mode?: "fresh" | "modify";
   showShare?: boolean;
 }
 
 const ENGINEER_RATE = 95; // $/hr
-const MANUAL_MINUTES_PER_OUTPUT_MINUTE = 45;
 
-export function calculateSavings(durationSeconds: number) {
-  const outputMinutes = durationSeconds / 60;
-  const timeSavedMinutes = outputMinutes * MANUAL_MINUTES_PER_OUTPUT_MINUTE;
-  const moneySaved = (timeSavedMinutes / 60) * ENGINEER_RATE;
-  return { timeSavedMinutes, moneySaved };
+function getComplexityScore(params: EffectParams) {
+  return Math.min(
+    1,
+    (params.distortion * 0.16) +
+    (params.reverb * 0.12) +
+    (params.delay * 0.11) +
+    (params.chorus * 0.09) +
+    (params.compression * 0.09) +
+    (params.overdrive * 0.16) +
+    ((Math.abs(params.eq.low) + Math.abs(params.eq.mid) + Math.abs(params.eq.high)) / 36) * 0.17 +
+    ((params.gain - 1) / 1) * 0.1
+  );
 }
 
-const ValueSummary = ({ durationSeconds, showShare = true }: ValueSummaryProps) => {
-  const { timeSavedMinutes, moneySaved } = calculateSavings(durationSeconds);
+export function calculateSavings(
+  durationSeconds: number,
+  options?: {
+    params?: EffectParams;
+    iterationRound?: number;
+    mode?: "fresh" | "modify";
+  },
+) {
+  const complexity = options?.params ? getComplexityScore(options.params) : 0.5;
+  const iterationRound = options?.iterationRound ?? 1;
+  const modeMultiplier = options?.mode === "modify" ? 1.2 : 1;
+  const manualMinutesPerOutputMinute = (24 + complexity * 42 + (iterationRound - 1) * 4) * modeMultiplier;
+  const outputMinutes = durationSeconds / 60;
+  const timeSavedMinutes = outputMinutes * manualMinutesPerOutputMinute;
+  const moneySaved = (timeSavedMinutes / 60) * ENGINEER_RATE;
+  return { timeSavedMinutes, moneySaved, manualMinutesPerOutputMinute };
+}
+
+const ValueSummary = ({
+  durationSeconds,
+  params,
+  iterationRound = 1,
+  mode = "fresh",
+  showShare = true,
+}: ValueSummaryProps) => {
+  const { timeSavedMinutes, moneySaved, manualMinutesPerOutputMinute } = calculateSavings(durationSeconds, {
+    params,
+    iterationRound,
+    mode,
+  });
   const hours = Math.floor(timeSavedMinutes / 60);
   const mins = Math.round(timeSavedMinutes % 60);
 
@@ -31,6 +69,9 @@ const ValueSummary = ({ durationSeconds, showShare = true }: ValueSummaryProps) 
     <div className="bg-glass rounded-2xl p-4 glow-primary">
       <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-3">
         Value Summary
+      </p>
+      <p className="text-[10px] text-muted-foreground mb-3">
+        Estimated from {manualMinutesPerOutputMinute.toFixed(0)} manual min per output min
       </p>
       <div className="grid grid-cols-2 gap-4">
         <div className="flex items-start gap-2">

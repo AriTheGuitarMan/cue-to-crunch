@@ -23,6 +23,10 @@ export const defaultParams: EffectParams = {
   gain: 1,
 };
 
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
 interface PromptMatch {
   keywords: string[];
   params: Partial<EffectParams>;
@@ -128,4 +132,69 @@ export function parsePrompt(prompt: string): EffectParams {
   }
 
   return result;
+}
+
+export function refineParamsFromPrompt(baseParams: EffectParams, prompt: string): EffectParams {
+  const lower = prompt.toLowerCase();
+  const next: EffectParams = {
+    ...baseParams,
+    eq: { ...baseParams.eq },
+  };
+
+  const hasMore = /\b(more|boost|increase|stronger|heavier|wider|bigger)\b/.test(lower);
+  const hasLess = /\b(less|reduce|decrease|softer|lighter|tighter|drier)\b/.test(lower);
+  const direction = hasMore && !hasLess ? 1 : hasLess && !hasMore ? -1 : 0;
+
+  const step = {
+    amount: 0.12,
+    eq: 1.8,
+    delayTime: 0.05,
+    gain: 0.08,
+  };
+
+  const adjust = (value: number, min: number, max: number, amount: number) =>
+    clamp(value + (direction === 0 ? amount : amount * direction), min, max);
+
+  if (/\b(distortion|fuzz|grit|saturation)\b/.test(lower)) {
+    next.distortion = adjust(next.distortion, 0, 1, step.amount);
+  }
+  if (/\b(reverb|space|room|hall|wet)\b/.test(lower)) {
+    next.reverb = adjust(next.reverb, 0, 1, step.amount);
+  }
+  if (/\b(delay|echo|repeat|slap)\b/.test(lower)) {
+    next.delay = adjust(next.delay, 0, 1, step.amount);
+    next.delayTime = adjust(next.delayTime, 0.05, 1.2, step.delayTime);
+  }
+  if (/\b(chorus|width|stereo)\b/.test(lower)) {
+    next.chorus = adjust(next.chorus, 0, 1, step.amount);
+  }
+  if (/\b(compression|punch|tight)\b/.test(lower)) {
+    next.compression = adjust(next.compression, 0, 1, step.amount);
+  }
+  if (/\b(overdrive|drive|crunch)\b/.test(lower)) {
+    next.overdrive = adjust(next.overdrive, 0, 1, step.amount);
+  }
+  if (/\b(bright|highs|treble|sparkle)\b/.test(lower)) {
+    next.eq.high = adjust(next.eq.high, -12, 12, step.eq);
+  }
+  if (/\b(mids|presence|vocal)\b/.test(lower)) {
+    next.eq.mid = adjust(next.eq.mid, -12, 12, step.eq);
+  }
+  if (/\b(low|bass|sub|bottom)\b/.test(lower)) {
+    next.eq.low = adjust(next.eq.low, -12, 12, step.eq);
+  }
+  if (/\b(volume|loud|gain)\b/.test(lower)) {
+    next.gain = adjust(next.gain, 0.5, 2, step.gain);
+  }
+
+  if (/\b(dry)\b/.test(lower)) {
+    next.reverb = clamp(next.reverb - step.amount, 0, 1);
+    next.delay = clamp(next.delay - step.amount, 0, 1);
+  }
+  if (/\b(clean|cleaner)\b/.test(lower)) {
+    next.distortion = clamp(next.distortion - step.amount, 0, 1);
+    next.overdrive = clamp(next.overdrive - step.amount, 0, 1);
+  }
+
+  return next;
 }

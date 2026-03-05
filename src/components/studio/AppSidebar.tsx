@@ -1,7 +1,7 @@
 import { Plus, History, Brain, Settings, Clock, DollarSign, LogOut, Guitar } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useAuth } from "@/hooks/useAuth";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import {
@@ -30,6 +30,7 @@ export function AppSidebar() {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
   const [savings, setSavings] = useState({ time: 0, money: 0 });
+  const [analytics, setAnalytics] = useState({ sessions: 0, avgMinutes: 0, monthMoney: 0 });
 
   useEffect(() => {
     if (!user) return;
@@ -45,6 +46,29 @@ export function AppSidebar() {
             money: data.lifetime_money_saved,
           });
         }
+      });
+
+    supabase
+      .from("sessions")
+      .select("time_saved_minutes, money_saved, created_at")
+      .eq("user_id", user.id)
+      .then(({ data }) => {
+        const sessions = data ?? [];
+        const now = new Date();
+        const currentMonth = now.getMonth();
+        const currentYear = now.getFullYear();
+        const monthMoney = sessions
+          .filter((s) => {
+            const created = new Date(s.created_at);
+            return created.getMonth() === currentMonth && created.getFullYear() === currentYear;
+          })
+          .reduce((sum, s) => sum + Number(s.money_saved ?? 0), 0);
+        const totalTime = sessions.reduce((sum, s) => sum + Number(s.time_saved_minutes ?? 0), 0);
+        setAnalytics({
+          sessions: sessions.length,
+          avgMinutes: sessions.length > 0 ? totalTime / sessions.length : 0,
+          monthMoney,
+        });
       });
   }, [user]);
 
@@ -103,6 +127,12 @@ export function AppSidebar() {
                 ${savings.money.toFixed(0)}
               </span>
             </div>
+            <p className="text-[10px] text-muted-foreground pt-1 border-t border-border/40">
+              {analytics.sessions} sessions • {Math.round(analytics.avgMinutes)}m avg saved each
+            </p>
+            <p className="text-[10px] text-muted-foreground">
+              This month: ${analytics.monthMoney.toFixed(0)}
+            </p>
           </div>
         )}
         <SidebarMenu>

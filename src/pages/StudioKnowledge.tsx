@@ -5,9 +5,11 @@ import StudioLayout from "@/components/studio/StudioLayout";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import type { Tables } from "@/integrations/supabase/types";
+import { useNavigate } from "react-router-dom";
 
 const StudioKnowledge = () => {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [entries, setEntries] = useState<Tables<"knowledge_base">[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -49,7 +51,8 @@ const StudioKnowledge = () => {
                 key={entry.id}
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="bg-glass rounded-2xl p-4"
+                onClick={() => entry.session_id && navigate(`/studio?loadSession=${entry.session_id}`)}
+                className={`bg-glass rounded-2xl p-4 ${entry.session_id ? "cursor-pointer hover:border-primary/30 transition-colors" : ""}`}
               >
                 <p className="text-sm text-foreground">{entry.summary}</p>
                 {entry.tags && entry.tags.length > 0 && (

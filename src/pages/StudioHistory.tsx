@@ -5,9 +5,11 @@ import StudioLayout from "@/components/studio/StudioLayout";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import type { Tables } from "@/integrations/supabase/types";
+import { useNavigate } from "react-router-dom";
 
 const StudioHistory = () => {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [sessions, setSessions] = useState<Tables<"sessions">[]>([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
@@ -72,6 +74,7 @@ const StudioHistory = () => {
                   key={session.id}
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
+                  onClick={() => navigate(`/studio?loadSession=${session.id}`)}
                   className="bg-glass rounded-2xl p-4 hover:border-primary/30 transition-colors cursor-pointer"
                 >
                   <div className="flex items-start justify-between gap-4">
