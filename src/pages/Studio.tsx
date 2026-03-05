@@ -237,7 +237,7 @@ const Studio = () => {
       mode: generationMode,
     });
 
-    const { data, error } = await supabase.from("sessions").insert({
+    const { data, error } = await supabase.from("sessions").insert([{
       user_id: user.id,
       prompt_text: promptText,
       refinement_note: refNote,
@@ -249,7 +249,7 @@ const Studio = () => {
       iteration_round: round,
       parent_session_id: parentId,
       effect_params: effectParams,
-    }).select().single();
+    }]).select().single();
 
     if (error) {
       console.error("Save session error:", error);
