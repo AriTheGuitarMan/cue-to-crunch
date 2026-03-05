@@ -268,3 +268,92 @@ export function destroyEngine(engine: AudioEngineState) {
   engine.chorusLfo.stop();
   engine.ctx.close();
 }
+
+export async function renderProcessedBuffer(input: AudioBuffer, params: EffectParams): Promise<AudioBuffer> {
+  const ctx = new OfflineAudioContext(input.numberOfChannels, input.length, input.sampleRate);
+  const source = ctx.createBufferSource();
+  source.buffer = input;
+
+  const distortion = ctx.createWaveShaper();
+  distortion.oversample = "4x";
+  const reverbConvolver = ctx.createConvolver();
+  reverbConvolver.buffer = createImpulseResponse(ctx as unknown as AudioContext, 2.5, 3);
+  const reverbGain = ctx.createGain();
+  const reverbDry = ctx.createGain();
+  const delayNode = ctx.createDelay(2);
+  const delayFeedback = ctx.createGain();
+  const delayGain = ctx.createGain();
+  const delayDry = ctx.createGain();
+  const chorusDelay = ctx.createDelay(0.05);
+  const chorusLfo = ctx.createOscillator();
+  chorusLfo.frequency.value = 1.5;
+  const chorusLfoGain = ctx.createGain();
+  const chorusGain = ctx.createGain();
+  const chorusDry = ctx.createGain();
+  const eqLow = ctx.createBiquadFilter();
+  eqLow.type = "lowshelf";
+  eqLow.frequency.value = 320;
+  const eqMid = ctx.createBiquadFilter();
+  eqMid.type = "peaking";
+  eqMid.frequency.value = 1000;
+  eqMid.Q.value = 1;
+  const eqHigh = ctx.createBiquadFilter();
+  eqHigh.type = "highshelf";
+  eqHigh.frequency.value = 3200;
+  const compressor = ctx.createDynamicsCompressor();
+  const overdrive = ctx.createWaveShaper();
+  overdrive.oversample = "4x";
+  const masterGain = ctx.createGain();
+
+  const now = 0;
+  distortion.curve = params.distortion > 0 ? makeDistortionCurve(params.distortion) : null;
+  reverbGain.gain.setValueAtTime(params.reverb, now);
+  reverbDry.gain.setValueAtTime(1 - params.reverb * 0.5, now);
+  delayNode.delayTime.setValueAtTime(params.delayTime, now);
+  delayFeedback.gain.setValueAtTime(params.delay * 0.6, now);
+  delayGain.gain.setValueAtTime(params.delay, now);
+  delayDry.gain.setValueAtTime(1, now);
+  chorusLfoGain.gain.setValueAtTime(params.chorus * 0.005, now);
+  chorusGain.gain.setValueAtTime(params.chorus, now);
+  chorusDry.gain.setValueAtTime(1, now);
+  eqLow.gain.setValueAtTime(params.eq.low, now);
+  eqMid.gain.setValueAtTime(params.eq.mid, now);
+  eqHigh.gain.setValueAtTime(params.eq.high, now);
+  compressor.threshold.setValueAtTime(-24 * params.compression, now);
+  compressor.ratio.setValueAtTime(1 + params.compression * 11, now);
+  overdrive.curve = params.overdrive > 0 ? makeDistortionCurve(params.overdrive * 0.5) : null;
+  masterGain.gain.setValueAtTime(params.gain, now);
+
+  source.connect(overdrive);
+  overdrive.connect(distortion);
+  distortion.connect(eqLow);
+  eqLow.connect(eqMid);
+  eqMid.connect(eqHigh);
+  eqHigh.connect(compressor);
+
+  compressor.connect(chorusDry);
+  compressor.connect(chorusDelay);
+  chorusLfo.connect(chorusLfoGain);
+  chorusLfoGain.connect(chorusDelay.delayTime);
+  chorusDelay.connect(chorusGain);
+  chorusDry.connect(delayDry);
+  chorusGain.connect(delayDry);
+
+  delayDry.connect(delayNode);
+  delayNode.connect(delayFeedback);
+  delayFeedback.connect(delayNode);
+  delayNode.connect(delayGain);
+  delayDry.connect(reverbDry);
+  delayGain.connect(reverbDry);
+
+  reverbDry.connect(reverbConvolver);
+  reverbConvolver.connect(reverbGain);
+  reverbDry.connect(masterGain);
+  reverbGain.connect(masterGain);
+
+  masterGain.connect(ctx.destination);
+
+  chorusLfo.start(0);
+  source.start(0);
+  return await ctx.startRendering();
+}

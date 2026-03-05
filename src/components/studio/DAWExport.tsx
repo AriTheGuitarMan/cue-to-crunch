@@ -2,10 +2,13 @@ import { useState } from "react";
 import { Download, ChevronDown, Info } from "lucide-react";
 import JSZip from "jszip";
 import { toast } from "sonner";
+import type { EffectParams } from "@/lib/effectPresets";
+import { renderProcessedBuffer } from "@/lib/audioEngine";
 
 interface DAWExportProps {
   audioBuffer: AudioBuffer;
   fileName: string;
+  params?: EffectParams;
 }
 
 function nextTick() {
@@ -65,7 +68,7 @@ async function audioBufferToWav(buffer: AudioBuffer, onProgress?: (progress: num
   return wav;
 }
 
-const DAWExport = ({ audioBuffer, fileName }: DAWExportProps) => {
+const DAWExport = ({ audioBuffer, fileName, params }: DAWExportProps) => {
   const [open, setOpen] = useState(false);
   const [guide, setGuide] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
@@ -76,7 +79,8 @@ const DAWExport = ({ audioBuffer, fileName }: DAWExportProps) => {
     setIsExporting(true);
     setExportProgress(1);
     try {
-      const wav = await audioBufferToWav(audioBuffer, setExportProgress);
+      const sourceBuffer = params ? await renderProcessedBuffer(audioBuffer, params) : audioBuffer;
+      const wav = await audioBufferToWav(sourceBuffer, setExportProgress);
       const zip = new JSZip();
       const baseName = fileName.replace(/\.[^.]+$/, "");
 

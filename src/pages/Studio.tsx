@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Upload, Play, Square, Zap, RotateCcw, Mic, FileAudio, Check, RefreshCw } from "lucide-react";
 import { parsePrompt, refineParamsFromPrompt, EffectParams, defaultParams } from "@/lib/effectPresets";
-import { loadAudioFile, createEngine, connectAndPlay, playDry, stopPlayback, destroyEngine, applyParams, AudioEngineState } from "@/lib/audioEngine";
+import { loadAudioFile, createEngine, connectAndPlay, playDry, stopPlayback, destroyEngine, applyParams, renderProcessedBuffer, AudioEngineState } from "@/lib/audioEngine";
 import Waveform from "@/components/studio/Waveform";
 import EffectKnobs from "@/components/studio/EffectKnobs";
 import LiveRecorder from "@/components/studio/LiveRecorder";
@@ -338,10 +338,11 @@ const Studio = () => {
     return data.publicUrl;
   }, [user, audioFile, sessionAudioUrl]);
 
-  const ensureOutputAudioUrl = useCallback(async (round: number) => {
+  const ensureOutputAudioUrl = useCallback(async (round: number, effectParams: EffectParams) => {
     if (!user || !audioBuffer) return null;
     const inputStem = audioFile ? sanitizeFileStem(audioFile.name) : "output";
-    const wavBytes = audioBufferToWavBytes(audioBuffer);
+    const processed = await renderProcessedBuffer(audioBuffer, effectParams);
+    const wavBytes = audioBufferToWavBytes(processed);
     const outputBlob = new Blob([wavBytes], { type: "audio/wav" });
     const outputFilePath = `${user.id}/outputs/${Date.now()}-${inputStem}-round-${round}.wav`;
     const { error } = await supabase.storage.from("audio-files").upload(outputFilePath, outputBlob, {
@@ -365,7 +366,7 @@ const Studio = () => {
   ) => {
     if (!user || !audioBuffer) return null;
     const inputAudioUrl = await ensureInputAudioUrl();
-    const outputAudioUrl = await ensureOutputAudioUrl(round);
+    const outputAudioUrl = await ensureOutputAudioUrl(round, effectParams);
     const { timeSavedMinutes, moneySaved } = calculateSavings(audioBuffer.duration, {
       params: effectParams,
       iterationRound: round,
@@ -816,7 +817,7 @@ const Studio = () => {
               />
 
               {/* DAW Export */}
-              <DAWExport audioBuffer={audioBuffer} fileName={audioFile?.name ?? "output"} />
+              <DAWExport audioBuffer={audioBuffer} fileName={audioFile?.name ?? "output"} params={params} />
             </motion.section>
           )}
         </AnimatePresence>
