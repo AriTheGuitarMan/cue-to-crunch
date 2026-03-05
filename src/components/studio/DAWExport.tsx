@@ -121,7 +121,7 @@ const DAWExport = ({ audioBuffer, fileName }: DAWExportProps) => {
       <button
         onClick={() => setOpen(!open)}
         disabled={isExporting}
-        className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-muted text-foreground font-semibold text-sm hover:bg-muted/80 transition-all"
+        className="w-full sm:w-auto flex items-center justify-between gap-2 px-4 py-2.5 rounded-xl bg-muted text-foreground font-semibold text-sm hover:bg-muted/80 transition-all disabled:opacity-60"
       >
         <Download className="w-4 h-4" />
         {isExporting ? `Exporting... ${exportProgress}%` : "Export to DAW"}
@@ -129,7 +129,7 @@ const DAWExport = ({ audioBuffer, fileName }: DAWExportProps) => {
       </button>
 
       {open && !isExporting && (
-        <div className="absolute top-full mt-2 left-0 z-50 w-64 bg-card border border-border rounded-xl shadow-lg p-1 space-y-0.5">
+        <div className="absolute top-full mt-2 left-0 z-50 w-[min(16rem,calc(100vw-2rem))] bg-card border border-border rounded-xl shadow-lg p-1 space-y-0.5">
           {[
             { key: "ableton" as const, label: "Ableton Live", desc: "24-bit WAV + project template" },
             { key: "logic" as const, label: "Logic Pro", desc: "WAV + Logic folder structure" },

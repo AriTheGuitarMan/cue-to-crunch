@@ -286,7 +286,7 @@ const Studio = () => {
 
   return (
     <StudioLayout>
-      <div className="px-6 py-8 max-w-4xl mx-auto space-y-8">
+      <div className="px-3 sm:px-6 py-5 sm:py-8 max-w-4xl mx-auto space-y-6 sm:space-y-8">
         {/* Step 1: Input */}
         <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
           <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
@@ -294,10 +294,10 @@ const Studio = () => {
           </h2>
 
           {/* Tabs */}
-          <div className="flex gap-1 mb-3">
+          <div className="grid grid-cols-2 gap-2 mb-3 sm:flex sm:gap-1">
             <button
               onClick={() => setInputTab("upload")}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+              className={`flex items-center justify-center sm:justify-start gap-2 px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-medium transition-colors ${
                 inputTab === "upload" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:text-foreground"
               }`}
             >
@@ -305,7 +305,7 @@ const Studio = () => {
             </button>
             <button
               onClick={() => setInputTab("record")}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+              className={`flex items-center justify-center sm:justify-start gap-2 px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-medium transition-colors ${
                 inputTab === "record" ? "bg-destructive text-destructive-foreground" : "bg-muted text-muted-foreground hover:text-foreground"
               }`}
             >
@@ -318,7 +318,7 @@ const Studio = () => {
               onDrop={handleDrop}
               onDragOver={(e) => e.preventDefault()}
               onClick={() => fileInputRef.current?.click()}
-              className={`relative border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-all hover:border-primary/50 ${
+              className={`relative border-2 border-dashed rounded-2xl p-5 sm:p-8 text-center cursor-pointer transition-all hover:border-primary/50 ${
                 audioFile ? "border-primary/30 bg-accent/10" : "border-border"
               }`}
             >
@@ -373,7 +373,7 @@ const Studio = () => {
                 </div>
               )}
               <div className="bg-glass rounded-2xl p-1 glow-primary">
-                <div className="flex items-center gap-3 bg-background/80 rounded-xl px-4 py-3">
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 bg-background/80 rounded-xl px-3 sm:px-4 py-3">
                   <Zap className="w-5 h-5 text-primary shrink-0" />
                   <input
                     type="text"
@@ -381,12 +381,12 @@ const Studio = () => {
                     onChange={(e) => setPrompt(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && handleGenerate()}
                     placeholder="e.g. warm blues tone with smooth reverb"
-                    className="flex-1 bg-transparent text-foreground font-mono text-sm outline-none placeholder:text-muted-foreground/50"
+                    className="flex-1 bg-transparent text-foreground font-mono text-xs sm:text-sm outline-none placeholder:text-muted-foreground/50"
                   />
                   <button
                     onClick={handleGenerate}
                     disabled={!prompt.trim() || isGenerating}
-                    className="shrink-0 px-5 py-2 rounded-lg bg-primary text-primary-foreground font-semibold text-sm hover:brightness-110 transition-all disabled:opacity-40"
+                    className="w-full sm:w-auto shrink-0 px-5 py-2 rounded-lg bg-primary text-primary-foreground font-semibold text-sm hover:brightness-110 transition-all disabled:opacity-40"
                   >
                     {isGenerating ? "Generating..." : "Generate"}
                   </button>
@@ -403,7 +403,7 @@ const Studio = () => {
                   </button>
                 ))}
               </div>
-              <div className="mt-3 flex items-center gap-2 text-xs">
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
                 <button
                   onClick={() => setGenerationMode("fresh")}
                   className={`px-3 py-1.5 rounded-full transition-colors ${
@@ -444,21 +444,21 @@ const Studio = () => {
                 </div>
 
                 {/* Playback controls */}
-                <div className="flex items-center gap-3 flex-wrap">
-                  {!isPlaying ? (
-                    <>
-                      <button onClick={() => handlePlay("wet")} className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-primary text-primary-foreground font-semibold text-sm hover:brightness-110 transition-all">
+              <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
+                {!isPlaying ? (
+                  <>
+                      <button onClick={() => handlePlay("wet")} className="w-full sm:w-auto justify-center flex items-center gap-2 px-5 py-2.5 rounded-xl bg-primary text-primary-foreground font-semibold text-sm hover:brightness-110 transition-all">
                         <Play className="w-4 h-4" /> Play with Effects
                       </button>
-                      <button onClick={() => handlePlay("dry")} className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-muted text-foreground font-semibold text-sm hover:bg-muted/80 transition-all">
+                      <button onClick={() => handlePlay("dry")} className="w-full sm:w-auto justify-center flex items-center gap-2 px-5 py-2.5 rounded-xl bg-muted text-foreground font-semibold text-sm hover:bg-muted/80 transition-all">
                         <Play className="w-4 h-4" /> Play Dry (A/B)
                       </button>
-                    </>
-                  ) : (
-                    <button onClick={handleStop} className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-destructive text-destructive-foreground font-semibold text-sm hover:brightness-110 transition-all">
+                  </>
+                ) : (
+                    <button onClick={handleStop} className="w-full sm:w-auto justify-center flex items-center gap-2 px-5 py-2.5 rounded-xl bg-destructive text-destructive-foreground font-semibold text-sm hover:brightness-110 transition-all">
                       <Square className="w-4 h-4" /> Stop
                     </button>
-                  )}
+                )}
                   {isPlaying && (
                     <span className="text-xs font-mono text-muted-foreground">
                       Playing: {playMode === "wet" ? "With Effects" : "Dry Signal"}
@@ -468,24 +468,24 @@ const Studio = () => {
               </div>
 
               {/* Iterative generation controls */}
-              <div className="flex items-center gap-3 flex-wrap">
+              <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
                 <button
                   onClick={() => { setShowRefine(false); toast.success("Tone saved! 🎸"); }}
-                  className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-primary/20 text-primary font-semibold text-sm hover:bg-primary/30 transition-all border border-primary/30"
+                  className="w-full sm:w-auto justify-center flex items-center gap-2 px-5 py-2.5 rounded-xl bg-primary/20 text-primary font-semibold text-sm hover:bg-primary/30 transition-all border border-primary/30"
                 >
                   <Check className="w-4 h-4" /> This is perfect
                 </button>
                 {iterationRound < 5 && (
                   <button
                     onClick={() => setShowRefine(!showRefine)}
-                    className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-secondary/20 text-secondary font-semibold text-sm hover:bg-secondary/30 transition-all border border-secondary/30"
+                    className="w-full sm:w-auto justify-center flex items-center gap-2 px-5 py-2.5 rounded-xl bg-secondary/20 text-secondary font-semibold text-sm hover:bg-secondary/30 transition-all border border-secondary/30"
                   >
                     <RefreshCw className="w-4 h-4" /> Refine it ({5 - iterationRound} left)
                   </button>
                 )}
                 <button
                   onClick={() => { setParams(defaultParams); setIsGenerated(false); setPrompt(""); setSessionId(null); setIterations([]); setIterationRound(1); setShowRefine(false); setPreviousParams(null); setLoadedSessionLabel(null); }}
-                  className="ml-auto flex items-center gap-2 px-4 py-2 rounded-xl bg-muted/50 text-muted-foreground text-sm hover:text-foreground transition-colors"
+                  className="w-full sm:w-auto sm:ml-auto justify-center flex items-center gap-2 px-4 py-2 rounded-xl bg-muted/50 text-muted-foreground text-sm hover:text-foreground transition-colors"
                 >
                   <RotateCcw className="w-3.5 h-3.5" /> Reset
                 </button>
@@ -497,7 +497,7 @@ const Studio = () => {
                   <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}>
                     <div className="space-y-3">
                       <div className="bg-glass rounded-2xl p-1">
-                        <div className="flex items-center gap-3 bg-background/80 rounded-xl px-4 py-3">
+                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 bg-background/80 rounded-xl px-3 sm:px-4 py-3">
                           <RefreshCw className="w-5 h-5 text-secondary shrink-0" />
                           <input
                             type="text"
@@ -505,12 +505,12 @@ const Studio = () => {
                             onChange={(e) => setRefinementNote(e.target.value)}
                             onKeyDown={(e) => e.key === "Enter" && handleRefine()}
                             placeholder="e.g. make it more percussive, add breakdown at 0:45"
-                            className="flex-1 bg-transparent text-foreground font-mono text-sm outline-none placeholder:text-muted-foreground/50"
+                            className="flex-1 bg-transparent text-foreground font-mono text-xs sm:text-sm outline-none placeholder:text-muted-foreground/50"
                           />
                           <button
                             onClick={handleRefine}
                             disabled={!refinementNote.trim() || isGenerating}
-                            className="shrink-0 px-5 py-2 rounded-lg bg-secondary text-secondary-foreground font-semibold text-sm hover:brightness-110 transition-all disabled:opacity-40"
+                            className="w-full sm:w-auto shrink-0 px-5 py-2 rounded-lg bg-secondary text-secondary-foreground font-semibold text-sm hover:brightness-110 transition-all disabled:opacity-40"
                           >
                             {isGenerating ? "Refining..." : "Refine"}
                           </button>
@@ -534,7 +534,7 @@ const Studio = () => {
 
               {/* Side-by-side comparison */}
               {previousParams && (
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <button
                     onClick={() => handleComparePlay("previous")}
                     className={`p-3 rounded-xl border text-sm font-medium transition-all ${

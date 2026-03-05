@@ -36,13 +36,13 @@ const StudioSettings = () => {
 
   return (
     <StudioLayout>
-      <div className="px-6 py-8 max-w-2xl mx-auto space-y-6">
+      <div className="px-3 sm:px-6 py-5 sm:py-8 max-w-2xl mx-auto space-y-5 sm:space-y-6">
         <div className="flex items-center gap-3">
           <Settings className="w-5 h-5 text-primary" />
           <h1 className="text-xl font-bold text-foreground">Settings</h1>
         </div>
 
-        <div className="bg-glass rounded-2xl p-6 space-y-4">
+        <div className="bg-glass rounded-2xl p-4 sm:p-6 space-y-4">
           <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
             Account
           </h2>
@@ -63,14 +63,14 @@ const StudioSettings = () => {
             <button
               onClick={handleSave}
               disabled={saving}
-              className="px-5 py-2 rounded-xl bg-primary text-primary-foreground font-semibold text-sm hover:brightness-110 transition-all disabled:opacity-50"
+              className="w-full sm:w-auto px-5 py-2 rounded-xl bg-primary text-primary-foreground font-semibold text-sm hover:brightness-110 transition-all disabled:opacity-50"
             >
               {saving ? "Saving..." : "Save Changes"}
             </button>
           </div>
         </div>
 
-        <div className="bg-glass rounded-2xl p-6 space-y-3">
+        <div className="bg-glass rounded-2xl p-4 sm:p-6 space-y-3">
           <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
             DAW Export Preferences
           </h2>
@@ -79,7 +79,7 @@ const StudioSettings = () => {
           </p>
         </div>
 
-        <div className="bg-glass rounded-2xl p-6 space-y-3">
+        <div className="bg-glass rounded-2xl p-4 sm:p-6 space-y-3">
           <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
             Coming Soon
           </h2>

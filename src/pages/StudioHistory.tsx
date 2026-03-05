@@ -39,7 +39,7 @@ const StudioHistory = () => {
 
   return (
     <StudioLayout>
-      <div className="px-6 py-8 max-w-4xl mx-auto space-y-6">
+      <div className="px-3 sm:px-6 py-5 sm:py-8 max-w-4xl mx-auto space-y-5 sm:space-y-6">
         <div className="flex items-center justify-between">
           <h1 className="text-xl font-bold text-foreground">Session History</h1>
         </div>
@@ -77,12 +77,12 @@ const StudioHistory = () => {
                   onClick={() => navigate(`/studio?loadSession=${session.id}`)}
                   className="bg-glass rounded-2xl p-4 hover:border-primary/30 transition-colors cursor-pointer"
                 >
-                  <div className="flex items-start justify-between gap-4">
+                  <div className="flex flex-col sm:flex-row items-start justify-between gap-3 sm:gap-4">
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-foreground truncate">
                         {session.prompt_text}
                       </p>
-                      <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
+                      <div className="flex flex-wrap items-center gap-2 sm:gap-4 mt-2 text-xs text-muted-foreground">
                         <span className="font-mono">
                           {new Date(session.created_at).toLocaleDateString()}
                         </span>
@@ -99,7 +99,7 @@ const StudioHistory = () => {
                         )}
                       </div>
                     </div>
-                    <div className="text-right shrink-0">
+                    <div className="text-left sm:text-right shrink-0">
                       {session.time_saved_minutes && (
                         <div className="flex items-center gap-1 text-xs text-primary">
                           <Clock className="w-3 h-3" />

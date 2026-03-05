@@ -148,11 +148,11 @@ const LiveRecorder = ({ onRecordingComplete }: LiveRecorderProps) => {
         <audio controls src={audioUrl} className="w-full h-10 rounded-xl" />
       )}
 
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-2 sm:gap-3">
         {state === "idle" && (
           <button
             onClick={startRecording}
-            className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-destructive text-destructive-foreground font-semibold text-sm hover:brightness-110 transition-all"
+            className="w-full sm:w-auto justify-center flex items-center gap-2 px-5 py-2.5 rounded-xl bg-destructive text-destructive-foreground font-semibold text-sm hover:brightness-110 transition-all"
           >
             <Mic className="w-4 h-4" /> Record
           </button>
@@ -162,13 +162,13 @@ const LiveRecorder = ({ onRecordingComplete }: LiveRecorderProps) => {
           <>
             <button
               onClick={pauseRecording}
-              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-muted text-foreground font-semibold text-sm"
+              className="flex-1 sm:flex-none justify-center flex items-center gap-2 px-4 py-2.5 rounded-xl bg-muted text-foreground font-semibold text-sm"
             >
               <Pause className="w-4 h-4" /> Pause
             </button>
             <button
               onClick={stopRecording}
-              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-destructive text-destructive-foreground font-semibold text-sm"
+              className="flex-1 sm:flex-none justify-center flex items-center gap-2 px-4 py-2.5 rounded-xl bg-destructive text-destructive-foreground font-semibold text-sm"
             >
               <Square className="w-4 h-4" /> Stop
             </button>
@@ -182,13 +182,13 @@ const LiveRecorder = ({ onRecordingComplete }: LiveRecorderProps) => {
           <>
             <button
               onClick={resumeRecording}
-              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-primary text-primary-foreground font-semibold text-sm"
+              className="flex-1 sm:flex-none justify-center flex items-center gap-2 px-4 py-2.5 rounded-xl bg-primary text-primary-foreground font-semibold text-sm"
             >
               <Play className="w-4 h-4" /> Resume
             </button>
             <button
               onClick={stopRecording}
-              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-destructive text-destructive-foreground font-semibold text-sm"
+              className="flex-1 sm:flex-none justify-center flex items-center gap-2 px-4 py-2.5 rounded-xl bg-destructive text-destructive-foreground font-semibold text-sm"
             >
               <Square className="w-4 h-4" /> Stop
             </button>
@@ -202,13 +202,13 @@ const LiveRecorder = ({ onRecordingComplete }: LiveRecorderProps) => {
           <>
             <button
               onClick={submitRecording}
-              className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-primary text-primary-foreground font-semibold text-sm hover:brightness-110 transition-all"
+              className="flex-1 sm:flex-none justify-center flex items-center gap-2 px-5 py-2.5 rounded-xl bg-primary text-primary-foreground font-semibold text-sm hover:brightness-110 transition-all"
             >
               Use Recording
             </button>
             <button
               onClick={reset}
-              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-muted text-muted-foreground text-sm"
+              className="flex-1 sm:flex-none justify-center flex items-center gap-2 px-4 py-2.5 rounded-xl bg-muted text-muted-foreground text-sm"
             >
               <RotateCcw className="w-3.5 h-3.5" /> Re-record
             </button>

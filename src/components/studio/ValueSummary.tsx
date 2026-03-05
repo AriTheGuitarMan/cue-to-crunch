@@ -73,7 +73,7 @@ const ValueSummary = ({
       <p className="text-[10px] text-muted-foreground mb-3">
         Estimated from {manualMinutesPerOutputMinute.toFixed(0)} manual min per output min
       </p>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
         <div className="flex items-start gap-2">
           <Clock className="w-4 h-4 text-primary mt-0.5" />
           <div>
@@ -96,7 +96,7 @@ const ValueSummary = ({
       {showShare && (
         <button
           onClick={handleShare}
-          className="mt-3 flex items-center gap-2 px-3 py-1.5 rounded-lg bg-muted text-xs text-muted-foreground hover:text-foreground transition-colors"
+          className="mt-3 w-full sm:w-auto justify-center sm:justify-start flex items-center gap-2 px-3 py-1.5 rounded-lg bg-muted text-xs text-muted-foreground hover:text-foreground transition-colors"
         >
           <Share2 className="w-3 h-3" /> Share your savings
         </button>

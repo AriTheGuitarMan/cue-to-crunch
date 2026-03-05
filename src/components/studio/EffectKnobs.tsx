@@ -24,7 +24,7 @@ const EffectKnobs = ({ params, onChange }: EffectKnobsProps) => {
   };
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
       {knobs.map(({ key, label }) => (
         <div key={key} className="bg-glass rounded-xl p-4 space-y-3">
           <div className="flex justify-between items-center">
