@@ -102,6 +102,37 @@ const Studio = () => {
     }
   }, []);
 
+  const loadAudioFromSessionUrl = useCallback(async (url: string) => {
+    let blob: Blob | null = null;
+
+    try {
+      const response = await fetch(url, { cache: "no-store" });
+      if (response.ok) blob = await response.blob();
+    } catch {
+      // fallback below
+    }
+
+    if (!blob) {
+      const storagePath = extractStoragePathFromPublicUrl(url);
+      if (storagePath) {
+        const { data, error } = await supabase.storage.from("audio-files").download(storagePath);
+        if (!error) blob = data;
+      }
+    }
+
+    if (!blob) throw new Error("Could not download session audio");
+
+    const extension = blob.type.includes("wav")
+      ? "wav"
+      : blob.type.includes("mpeg")
+        ? "mp3"
+        : blob.type.includes("ogg")
+          ? "ogg"
+          : "webm";
+
+    return new File([blob], `session-restore.${extension}`, { type: blob.type || "audio/webm" });
+  }, []);
+
   useEffect(() => {
     const loadSessionId = searchParams.get("loadSession");
     if (!user || !loadSessionId) return;
@@ -191,37 +222,6 @@ const Studio = () => {
     return data.publicUrl;
   }, [user, audioFile, sessionAudioUrl]);
 
-  const loadAudioFromSessionUrl = useCallback(async (url: string) => {
-    let blob: Blob | null = null;
-
-    try {
-      const response = await fetch(url, { cache: "no-store" });
-      if (response.ok) blob = await response.blob();
-    } catch {
-      // fallback below
-    }
-
-    if (!blob) {
-      const storagePath = extractStoragePathFromPublicUrl(url);
-      if (storagePath) {
-        const { data, error } = await supabase.storage.from("audio-files").download(storagePath);
-        if (!error) blob = data;
-      }
-    }
-
-    if (!blob) throw new Error("Could not download session audio");
-
-    const extension = blob.type.includes("wav")
-      ? "wav"
-      : blob.type.includes("mpeg")
-        ? "mp3"
-        : blob.type.includes("ogg")
-          ? "ogg"
-          : "webm";
-
-    return new File([blob], `session-restore.${extension}`, { type: blob.type || "audio/webm" });
-  }, []);
-
   const saveSession = useCallback(async (
     promptText: string,
     effectParams: EffectParams,
@@ -237,7 +237,7 @@ const Studio = () => {
       mode: generationMode,
     });
 
-    const { data, error } = await supabase.from("sessions").insert({
+    const { data, error } = await supabase.from("sessions").insert([{
       user_id: user.id,
       prompt_text: promptText,
       refinement_note: refNote,
@@ -248,8 +248,8 @@ const Studio = () => {
       money_saved: moneySaved,
       iteration_round: round,
       parent_session_id: parentId,
-      effect_params: effectParams,
-    }).select().single();
+      effect_params: JSON.parse(JSON.stringify(effectParams)),
+    }]).select().single();
 
     if (error) {
       console.error("Save session error:", error);
