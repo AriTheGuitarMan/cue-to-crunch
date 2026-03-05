@@ -35,6 +35,13 @@ const refinementSuggestions = [
   "make it more aggressive in the mids",
 ];
 
+function extractStoragePathFromPublicUrl(url: string) {
+  const marker = "/audio-files/";
+  const idx = url.indexOf(marker);
+  if (idx === -1) return null;
+  return decodeURIComponent(url.slice(idx + marker.length));
+}
+
 const Studio = () => {
   const { user } = useAuth();
   const [searchParams] = useSearchParams();
@@ -109,25 +116,32 @@ const Studio = () => {
         .maybeSingle();
       if (!data || cancelled) return;
 
+      let audioUrlToLoad = data.input_audio_url;
+      if (!audioUrlToLoad) {
+        const { data: chainData } = await supabase
+          .from("sessions")
+          .select("input_audio_url, created_at")
+          .eq("user_id", user.id)
+          .or(`id.eq.${data.id},parent_session_id.eq.${data.id}`)
+          .order("created_at", { ascending: true });
+        audioUrlToLoad = chainData?.find((s) => !!s.input_audio_url)?.input_audio_url ?? null;
+      }
+
       setSessionId(data.id);
       setPrompt(data.prompt_text);
       setIterationRound(data.iteration_round);
       setGenerationMode("modify");
       setIterations([data]);
       setInputSource((data.input_source as "upload" | "recording") ?? "upload");
-      setSessionAudioUrl(data.input_audio_url);
+      setSessionAudioUrl(audioUrlToLoad);
       if (data.effect_params) {
         setParams(data.effect_params as unknown as EffectParams);
       }
       setLoadedSessionLabel(`Loaded session from ${new Date(data.created_at).toLocaleString()}`);
 
-      if (data.input_audio_url) {
+      if (audioUrlToLoad) {
         try {
-          const response = await fetch(data.input_audio_url);
-          if (!response.ok) throw new Error("Audio fetch failed");
-          const blob = await response.blob();
-          const extension = blob.type.includes("wav") ? "wav" : blob.type.includes("mpeg") ? "mp3" : "webm";
-          const file = new File([blob], `session-${data.id}.${extension}`, { type: blob.type || "audio/webm" });
+          const file = await loadAudioFromSessionUrl(audioUrlToLoad);
           await handleFileUpload(file, { preserveSession: true });
           if (!cancelled) toast.success("Generation loaded with source audio.");
         } catch (error) {
@@ -143,7 +157,7 @@ const Studio = () => {
     return () => {
       cancelled = true;
     };
-  }, [searchParams, user, handleFileUpload]);
+  }, [searchParams, user, handleFileUpload, loadAudioFromSessionUrl]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -176,6 +190,37 @@ const Studio = () => {
     setSessionAudioUrl(data.publicUrl);
     return data.publicUrl;
   }, [user, audioFile, sessionAudioUrl]);
+
+  const loadAudioFromSessionUrl = useCallback(async (url: string) => {
+    let blob: Blob | null = null;
+
+    try {
+      const response = await fetch(url, { cache: "no-store" });
+      if (response.ok) blob = await response.blob();
+    } catch {
+      // fallback below
+    }
+
+    if (!blob) {
+      const storagePath = extractStoragePathFromPublicUrl(url);
+      if (storagePath) {
+        const { data, error } = await supabase.storage.from("audio-files").download(storagePath);
+        if (!error) blob = data;
+      }
+    }
+
+    if (!blob) throw new Error("Could not download session audio");
+
+    const extension = blob.type.includes("wav")
+      ? "wav"
+      : blob.type.includes("mpeg")
+        ? "mp3"
+        : blob.type.includes("ogg")
+          ? "ogg"
+          : "webm";
+
+    return new File([blob], `session-restore.${extension}`, { type: blob.type || "audio/webm" });
+  }, []);
 
   const saveSession = useCallback(async (
     promptText: string,
