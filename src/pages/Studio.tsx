@@ -42,6 +42,47 @@ function extractStoragePathFromPublicUrl(url: string) {
   return decodeURIComponent(url.slice(idx + marker.length));
 }
 
+type SessionAudioRef = {
+  id: string;
+  parent_session_id: string | null;
+  input_audio_url: string | null;
+  created_at: string;
+};
+
+function resolveInputAudioUrlForSession(session: SessionAudioRef, sessions: SessionAudioRef[]) {
+  const byId = new Map(sessions.map((s) => [s.id, s]));
+
+  let cursor: SessionAudioRef | undefined = session;
+  let rootId = session.id;
+  while (cursor) {
+    if (cursor.input_audio_url) return cursor.input_audio_url;
+    if (!cursor.parent_session_id) {
+      rootId = cursor.id;
+      break;
+    }
+    rootId = cursor.parent_session_id;
+    cursor = byId.get(cursor.parent_session_id);
+  }
+
+  const isDescendantOfRoot = (candidate: SessionAudioRef) => {
+    let walk: SessionAudioRef | undefined = candidate;
+    let guard = 0;
+    while (walk && guard < 25) {
+      if (walk.id === rootId) return true;
+      if (!walk.parent_session_id) return false;
+      walk = byId.get(walk.parent_session_id);
+      guard++;
+    }
+    return false;
+  };
+
+  const withAudio = sessions
+    .filter((s) => !!s.input_audio_url && isDescendantOfRoot(s))
+    .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+
+  return withAudio[0]?.input_audio_url ?? null;
+}
+
 const Studio = () => {
   const { user } = useAuth();
   const [searchParams] = useSearchParams();
@@ -113,7 +154,7 @@ const Studio = () => {
     }
 
     if (!blob) {
-      const storagePath = extractStoragePathFromPublicUrl(url);
+      const storagePath = extractStoragePathFromPublicUrl(url) ?? (url.includes("/") && !url.startsWith("http") ? url : null);
       if (storagePath) {
         const { data, error } = await supabase.storage.from("audio-files").download(storagePath);
         if (!error) blob = data;
@@ -147,16 +188,14 @@ const Studio = () => {
         .maybeSingle();
       if (!data || cancelled) return;
 
-      let audioUrlToLoad = data.input_audio_url;
-      if (!audioUrlToLoad) {
-        const { data: chainData } = await supabase
-          .from("sessions")
-          .select("input_audio_url, created_at")
-          .eq("user_id", user.id)
-          .or(`id.eq.${data.id},parent_session_id.eq.${data.id}`)
-          .order("created_at", { ascending: true });
-        audioUrlToLoad = chainData?.find((s) => !!s.input_audio_url)?.input_audio_url ?? null;
-      }
+      const { data: allSessions } = await supabase
+        .from("sessions")
+        .select("id, parent_session_id, input_audio_url, created_at")
+        .eq("user_id", user.id);
+      const audioUrlToLoad = resolveInputAudioUrlForSession(
+        data as unknown as SessionAudioRef,
+        (allSessions as SessionAudioRef[]) ?? [],
+      );
 
       setSessionId(data.id);
       setPrompt(data.prompt_text);
