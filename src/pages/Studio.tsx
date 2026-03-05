@@ -248,7 +248,7 @@ const Studio = () => {
       money_saved: moneySaved,
       iteration_round: round,
       parent_session_id: parentId,
-      effect_params: effectParams,
+      effect_params: effectParams as unknown as Json,
     }]).select().single();
 
     if (error) {
