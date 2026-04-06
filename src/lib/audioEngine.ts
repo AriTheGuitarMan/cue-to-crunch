@@ -62,7 +62,7 @@ export async function loadAudioFile(file: File): Promise<AudioBuffer> {
 }
 
 export function createEngine(buffer: AudioBuffer): AudioEngineState {
-  const ctx = new AudioContext();
+  const ctx = new AudioContext({ latencyHint: "interactive" });
 
   // Create all nodes
   const distortion = ctx.createWaveShaper();
@@ -172,6 +172,9 @@ export function applyParams(engine: AudioEngineState, params: EffectParams) {
 
 export function connectAndPlay(engine: AudioEngineState, params: EffectParams, startTime = 0) {
   stopPlayback(engine);
+  if (engine.ctx.state !== "running") {
+    void engine.ctx.resume();
+  }
 
   const source = engine.ctx.createBufferSource();
   source.buffer = engine.buffer;
@@ -221,6 +224,9 @@ export function connectAndPlay(engine: AudioEngineState, params: EffectParams, s
 
 export function playDry(engine: AudioEngineState, startTime = 0) {
   stopPlayback(engine);
+  if (engine.ctx.state !== "running") {
+    void engine.ctx.resume();
+  }
   const source = engine.ctx.createBufferSource();
   source.buffer = engine.buffer;
   engine.source = source;

@@ -602,7 +602,10 @@ const Studio = () => {
 
   const handlePlay = useCallback((mode: "wet" | "dry") => {
     if (!audioBuffer) return;
-    if (engineRef.current) stopPlayback(engineRef.current);
+    if (engineRef.current) {
+      destroyEngine(engineRef.current);
+      engineRef.current = null;
+    }
     const engine = createEngine(audioBuffer);
     engineRef.current = engine;
     const source = mode === "wet" ? connectAndPlay(engine, params) : playDry(engine);
@@ -612,14 +615,19 @@ const Studio = () => {
   }, [audioBuffer, params]);
 
   const handleStop = useCallback(() => {
-    if (engineRef.current) stopPlayback(engineRef.current);
+    if (engineRef.current) {
+      stopPlayback(engineRef.current);
+    }
     setIsPlaying(false);
   }, []);
 
   const handleCompareIterationPlay = useCallback((iteration: Tables<"sessions">) => {
     if (!audioBuffer || !iteration.effect_params) return;
     if (compareEngineRef.current) destroyEngine(compareEngineRef.current);
-    if (engineRef.current) stopPlayback(engineRef.current);
+    if (engineRef.current) {
+      stopPlayback(engineRef.current);
+      setIsPlaying(false);
+    }
 
     const engine = createEngine(audioBuffer);
     compareEngineRef.current = engine;
