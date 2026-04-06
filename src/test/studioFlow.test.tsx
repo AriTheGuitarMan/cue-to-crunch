@@ -207,6 +207,8 @@ describe("studio interaction flows", () => {
     await waitFor(() => {
       expect(screen.getByText(/Active Version: Remix v1/i)).toBeInTheDocument();
     });
+    expect(screen.getByText(/4. Effect Chain/i)).toBeInTheDocument();
+    expect(screen.getByText(/Reverb:/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /This is perfect/i }));
     fireEvent.click(screen.getByRole("button", { name: /Refine it/i }));
@@ -221,6 +223,7 @@ describe("studio interaction flows", () => {
     await waitFor(() => {
       expect(screen.getByText(/Active Version: Remix v2/i)).toBeInTheDocument();
     });
+    expect(screen.getAllByText(/Remix v2/i).length).toBeGreaterThan(0);
 
     fireEvent.change(screen.getByPlaceholderText(/warm blues tone/i), {
       target: { value: "heavy metal crunch, tight low-end" },

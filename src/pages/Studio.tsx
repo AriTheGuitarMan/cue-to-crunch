@@ -11,6 +11,7 @@ import LiveRecorder from "@/components/studio/LiveRecorder";
 import ValueSummary from "@/components/studio/ValueSummary";
 import DAWExport from "@/components/studio/DAWExport";
 import IterationHistory from "@/components/studio/IterationHistory";
+import EffectChainSummary from "@/components/studio/EffectChainSummary";
 import GrowthAutomationSuite from "@/components/studio/GrowthAutomationSuite";
 import StudioLayout from "@/components/studio/StudioLayout";
 import { useAuth } from "@/hooks/useAuth";
@@ -1115,6 +1116,17 @@ const Studio = () => {
                 iterationRound={iterationRound}
                 mode={generationMode}
               />
+
+              <div>
+                <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+                  4. Effect Chain
+                </h3>
+                <EffectChainSummary
+                  iterations={iterations}
+                  currentRound={iterationRound}
+                  currentParams={params}
+                />
+              </div>
 
               {/* DAW Export */}
               <DAWExport audioBuffer={audioBuffer} fileName={audioFile?.name ?? "output"} params={params} />
