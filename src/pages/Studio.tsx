@@ -19,6 +19,7 @@ import { calculateSavings } from "@/components/studio/ValueSummary";
 import { appendGuestKnowledge, appendGuestSession, getGuestSessions, getGuestProfile, updateGuestProfile } from "@/lib/guestStore";
 import { isGuestAudioRef, loadGuestAudioBlob, parseGuestAudioRef, saveGuestAudioBlob } from "@/lib/guestAudioStore";
 import { audioBufferToWavBlob } from "@/lib/audioEncoding";
+import { createSessionDraft, replaceSessionInList } from "@/lib/studioSessions";
 import { toast } from "sonner";
 import type { Tables } from "@/integrations/supabase/types";
 import { useSearchParams } from "react-router-dom";
@@ -71,11 +72,6 @@ function wait(ms: number) {
   return new Promise<void>((resolve) => {
     setTimeout(resolve, ms);
   });
-}
-
-function createLocalId(prefix: string) {
-  const random = Math.random().toString(36).slice(2, 10);
-  return `${prefix}-${Date.now()}-${random}`;
 }
 
 type SessionAudioRef = {
@@ -150,6 +146,7 @@ const Studio = () => {
   const engineRef = useRef<AudioEngineState | null>(null);
   const compareEngineRef = useRef<AudioEngineState | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const persistQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => {
     return () => {
@@ -390,73 +387,54 @@ const Studio = () => {
     return data.publicUrl;
   }, [user, audioBuffer, audioFile]);
 
-  const saveSession = useCallback(async (
-    promptText: string,
-    effectParams: EffectParams,
-    round: number,
-    parentId: string | null,
-    refNote: string | null
-  ) => {
-    if (!audioBuffer) return null;
+  const persistSession = useCallback(async (sessionDraft: Tables<"sessions">) => {
     const inputAudioUrl = await ensureInputAudioUrl();
-    const outputAudioUrl = await ensureOutputAudioUrl(round, effectParams);
-    const { timeSavedMinutes, moneySaved } = calculateSavings(audioBuffer.duration, {
-      params: effectParams,
-      iterationRound: round,
-      mode: generationMode,
-    });
+    const outputAudioUrl = await ensureOutputAudioUrl(
+      sessionDraft.iteration_round,
+      sessionDraft.effect_params as unknown as EffectParams,
+    );
+    const sessionToSave: Tables<"sessions"> = {
+      ...sessionDraft,
+      input_audio_url: inputAudioUrl,
+      output_audio_url: outputAudioUrl,
+    };
 
     if (!user) {
-      const newSession: Tables<"sessions"> = {
-        id: createLocalId("guest-session"),
-        created_at: new Date().toISOString(),
-        user_id: "guest-local",
-        prompt_text: promptText,
-        refinement_note: refNote,
-        input_source: inputSource,
-        input_audio_url: inputAudioUrl,
-        output_audio_url: outputAudioUrl,
-        duration_seconds: audioBuffer.duration,
-        time_saved_minutes: timeSavedMinutes,
-        money_saved: moneySaved,
-        iteration_round: round,
-        parent_session_id: parentId,
-        effect_params: JSON.parse(JSON.stringify(effectParams)),
-      };
-      appendGuestSession(newSession);
+      appendGuestSession(sessionToSave);
 
       const profile = getGuestProfile();
       updateGuestProfile({
-        lifetime_time_saved_minutes: profile.lifetime_time_saved_minutes + timeSavedMinutes,
-        lifetime_money_saved: profile.lifetime_money_saved + moneySaved,
+        lifetime_time_saved_minutes: profile.lifetime_time_saved_minutes + Number(sessionToSave.time_saved_minutes ?? 0),
+        lifetime_money_saved: profile.lifetime_money_saved + Number(sessionToSave.money_saved ?? 0),
       });
 
-      const tags = promptText.toLowerCase().split(/\s+/).filter((w) => w.length > 3);
+      const tags = sessionToSave.prompt_text.toLowerCase().split(/\s+/).filter((w) => w.length > 3);
       appendGuestKnowledge({
-        id: createLocalId("guest-kb"),
-        created_at: new Date().toISOString(),
+        id: `${sessionToSave.id}-kb`,
+        created_at: sessionToSave.created_at,
         user_id: "guest-local",
-        session_id: newSession.id,
-        summary: `${promptText}${refNote ? ` → ${refNote}` : ""}`,
+        session_id: sessionToSave.id,
+        summary: `${sessionToSave.prompt_text}${sessionToSave.refinement_note ? ` → ${sessionToSave.refinement_note}` : ""}`,
         tags: tags.slice(0, 10),
       });
 
-      return newSession;
+      return sessionToSave;
     }
 
     const { data, error } = await supabase.from("sessions").insert([{
+      id: sessionToSave.id,
       user_id: user.id,
-      prompt_text: promptText,
-      refinement_note: refNote,
-      input_source: inputSource,
-      input_audio_url: inputAudioUrl,
-      output_audio_url: outputAudioUrl,
-      duration_seconds: audioBuffer.duration,
-      time_saved_minutes: timeSavedMinutes,
-      money_saved: moneySaved,
-      iteration_round: round,
-      parent_session_id: parentId,
-      effect_params: JSON.parse(JSON.stringify(effectParams)),
+      prompt_text: sessionToSave.prompt_text,
+      refinement_note: sessionToSave.refinement_note,
+      input_source: sessionToSave.input_source,
+      input_audio_url: sessionToSave.input_audio_url,
+      output_audio_url: sessionToSave.output_audio_url,
+      duration_seconds: sessionToSave.duration_seconds,
+      time_saved_minutes: sessionToSave.time_saved_minutes,
+      money_saved: sessionToSave.money_saved,
+      iteration_round: sessionToSave.iteration_round,
+      parent_session_id: sessionToSave.parent_session_id,
+      effect_params: sessionToSave.effect_params,
     }]).select().single();
 
     if (error) {
@@ -473,25 +451,45 @@ const Studio = () => {
 
     if (profile) {
       await supabase.from("profiles").update({
-        lifetime_time_saved_minutes: profile.lifetime_time_saved_minutes + timeSavedMinutes,
-        lifetime_money_saved: profile.lifetime_money_saved + moneySaved,
+        lifetime_time_saved_minutes: profile.lifetime_time_saved_minutes + Number(sessionToSave.time_saved_minutes ?? 0),
+        lifetime_money_saved: profile.lifetime_money_saved + Number(sessionToSave.money_saved ?? 0),
       }).eq("user_id", user.id);
     }
 
     // Save to knowledge base
-    const tags = promptText.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+    const tags = sessionToSave.prompt_text.toLowerCase().split(/\s+/).filter((w) => w.length > 3);
     await supabase.from("knowledge_base").insert({
       user_id: user.id,
       session_id: data.id,
-      summary: `${promptText}${refNote ? ` → ${refNote}` : ""}`,
+      summary: `${sessionToSave.prompt_text}${sessionToSave.refinement_note ? ` → ${sessionToSave.refinement_note}` : ""}`,
       tags: tags.slice(0, 10),
     });
 
     return data;
-  }, [user, audioBuffer, inputSource, generationMode, ensureInputAudioUrl, ensureOutputAudioUrl]);
+  }, [user, ensureInputAudioUrl, ensureOutputAudioUrl]);
+
+  const enqueueSessionPersistence = useCallback((sessionDraft: Tables<"sessions">) => {
+    persistQueueRef.current = persistQueueRef.current
+      .then(async () => {
+        const savedSession = await persistSession(sessionDraft);
+        if (!savedSession) return;
+        setIterations((prev) => replaceSessionInList(prev, savedSession));
+        setHistoryToneRefs((prev) => [
+          {
+            prompt: `${savedSession.prompt_text} ${savedSession.refinement_note ?? ""}`.trim(),
+            effectParams: savedSession.effect_params as unknown as EffectParams,
+          },
+          ...prev,
+        ].slice(0, 40));
+      })
+      .catch((error) => {
+        console.error("Queued session persistence failed:", error);
+        toast.error("Session save failed, but the current tone is still active.");
+      });
+  }, [persistSession]);
 
   const handleGenerate = useCallback(async () => {
-    if (!prompt.trim() || isGenerating) return;
+    if (!prompt.trim() || isGenerating || !audioBuffer) return;
     setIsGenerating(true);
     try {
       await wait(120);
@@ -514,22 +512,38 @@ const Studio = () => {
         applyParams(engineRef.current, newParams);
       }
 
-      const session = await saveSession(prompt, newParams, 1, null, null);
-      if (session) {
-        setSessionId(session.id);
-        setIterationRound(1);
-        setIterations([session]);
-      }
+      const { timeSavedMinutes, moneySaved } = calculateSavings(audioBuffer.duration, {
+        params: newParams,
+        iterationRound: 1,
+        mode: generationMode,
+      });
+      const sessionDraft = createSessionDraft({
+        userId: user?.id ?? "guest-local",
+        promptText: prompt,
+        refinementNote: null,
+        inputSource,
+        durationSeconds: audioBuffer.duration,
+        timeSavedMinutes,
+        moneySaved,
+        iterationRound: 1,
+        parentSessionId: null,
+        effectParams: newParams,
+      });
+
+      setSessionId(sessionDraft.id);
+      setIterationRound(1);
+      setIterations([sessionDraft]);
+      enqueueSessionPersistence(sessionDraft);
     } catch (error) {
       console.error("Generation failed:", error);
       toast.error("Generation failed. Try again with a shorter file or different prompt.");
     } finally {
       setIsGenerating(false);
     }
-  }, [prompt, isGenerating, isPlaying, saveSession, generationMode, params, historyToneRefs, sourceProfile]);
+  }, [prompt, isGenerating, audioBuffer, isPlaying, generationMode, params, historyToneRefs, sourceProfile, user?.id, inputSource, enqueueSessionPersistence]);
 
   const handleRefine = useCallback(async () => {
-    if (!refinementNote.trim() || iterationRound >= 5 || isGenerating) return;
+    if (!refinementNote.trim() || iterationRound >= 5 || isGenerating || !audioBuffer) return;
     setIsGenerating(true);
     try {
       await wait(120);
@@ -547,12 +561,27 @@ const Studio = () => {
 
       const newRound = iterationRound + 1;
       setIterationRound(newRound);
+      const { timeSavedMinutes, moneySaved } = calculateSavings(audioBuffer.duration, {
+        params: newParams,
+        iterationRound: newRound,
+        mode: generationMode,
+      });
+      const sessionDraft = createSessionDraft({
+        userId: user?.id ?? "guest-local",
+        promptText: prompt,
+        refinementNote,
+        inputSource,
+        durationSeconds: audioBuffer.duration,
+        timeSavedMinutes,
+        moneySaved,
+        iterationRound: newRound,
+        parentSessionId: sessionId,
+        effectParams: newParams,
+      });
 
-      const session = await saveSession(prompt, newParams, newRound, sessionId, refinementNote);
-      if (session) {
-        setIterations((prev) => [...prev, session]);
-        setSessionId(session.id);
-      }
+      setIterations((prev) => [...prev, sessionDraft]);
+      setSessionId(sessionDraft.id);
+      enqueueSessionPersistence(sessionDraft);
 
       setRefinementNote("");
       setShowRefine(false);
@@ -566,7 +595,7 @@ const Studio = () => {
     } finally {
       setIsGenerating(false);
     }
-  }, [refinementNote, iterationRound, isGenerating, params, prompt, sessionId, isPlaying, saveSession, historyToneRefs, sourceProfile]);
+  }, [refinementNote, iterationRound, isGenerating, audioBuffer, params, prompt, sessionId, isPlaying, historyToneRefs, sourceProfile, generationMode, user?.id, inputSource, enqueueSessionPersistence]);
 
   const handlePlay = useCallback((mode: "wet" | "dry") => {
     if (!audioBuffer) return;
