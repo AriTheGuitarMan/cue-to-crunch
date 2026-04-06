@@ -74,6 +74,17 @@ function wait(ms: number) {
   });
 }
 
+function waitForIdle(timeout = 2000) {
+  return new Promise<void>((resolve) => {
+    if (typeof window === "undefined" || typeof window.requestIdleCallback !== "function") {
+      setTimeout(resolve, 0);
+      return;
+    }
+
+    window.requestIdleCallback(() => resolve(), { timeout });
+  });
+}
+
 type SessionAudioRef = {
   id: string;
   parent_session_id: string | null;
@@ -147,6 +158,7 @@ const Studio = () => {
   const compareEngineRef = useRef<AudioEngineState | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const persistQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const isPlayingRef = useRef(false);
 
   useEffect(() => {
     return () => {
@@ -162,6 +174,10 @@ const Studio = () => {
     }
     setSourceProfile(analyzeSourceAudio(audioBuffer));
   }, [audioBuffer]);
+
+  useEffect(() => {
+    isPlayingRef.current = isPlaying;
+  }, [isPlaying]);
 
   useEffect(() => {
     if (!user) {
@@ -324,20 +340,22 @@ const Studio = () => {
     await handleFileUpload(file);
   }, [handleFileUpload]);
 
-  const ensureInputAudioUrl = useCallback(async () => {
-    if (!audioFile) return null;
-    if (sessionAudioUrl) return sessionAudioUrl;
+  const ensureInputAudioUrl = useCallback(async (
+    file: File | null,
+    existingUrl: string | null,
+  ) => {
+    if (!file) return null;
+    if (existingUrl) return existingUrl;
 
     if (!user) {
-      const localUrl = await saveGuestAudioBlob(audioFile, audioFile.name);
-      setSessionAudioUrl(localUrl);
+      const localUrl = await saveGuestAudioBlob(file, file.name);
       return localUrl;
     }
 
-    const originalName = audioFile.name.replace(/[\\/]/g, "_");
+    const originalName = file.name.replace(/[\\/]/g, "_");
     const filePath = `${user.id}/inputs/${Date.now()}__${originalName}`;
-    const { error } = await supabase.storage.from("audio-files").upload(filePath, audioFile, {
-      contentType: audioFile.type || "audio/webm",
+    const { error } = await supabase.storage.from("audio-files").upload(filePath, file, {
+      contentType: file.type || "audio/webm",
       upsert: false,
     });
     if (error) {
@@ -346,15 +364,19 @@ const Studio = () => {
     }
 
     const { data } = supabase.storage.from("audio-files").getPublicUrl(filePath);
-    setSessionAudioUrl(data.publicUrl);
     return data.publicUrl;
-  }, [user, audioFile, sessionAudioUrl]);
+  }, [user]);
 
-  const ensureOutputAudioUrl = useCallback(async (round: number, effectParams: EffectParams) => {
-    if (!audioBuffer) return null;
-    const inputStem = audioFile ? sanitizeFileStem(audioFile.name) : "output";
-    let processed = await renderProcessedBuffer(audioBuffer, effectParams);
-    const delta = measureDryWetDelta(extractMono(audioBuffer), extractMono(processed));
+  const ensureOutputAudioUrl = useCallback(async (
+    buffer: AudioBuffer | null,
+    file: File | null,
+    round: number,
+    effectParams: EffectParams,
+  ) => {
+    if (!buffer) return null;
+    const inputStem = file ? sanitizeFileStem(file.name) : "output";
+    let processed = await renderProcessedBuffer(buffer, effectParams);
+    const delta = measureDryWetDelta(extractMono(buffer), extractMono(processed));
     if (!isAudibleDelta(delta)) {
       const forcedParams: EffectParams = {
         ...effectParams,
@@ -364,7 +386,7 @@ const Studio = () => {
         compression: Math.min(1, effectParams.compression + 0.1),
         gain: Math.min(2, effectParams.gain + 0.15),
       };
-      processed = await renderProcessedBuffer(audioBuffer, forcedParams);
+      processed = await renderProcessedBuffer(buffer, forcedParams);
       console.warn("Output had low dry/wet delta; applied forced audible delta fallback.", delta);
     }
     const outputBlob = await audioBufferToWavBlob(processed);
@@ -385,11 +407,20 @@ const Studio = () => {
     }
     const { data } = supabase.storage.from("audio-files").getPublicUrl(outputFilePath);
     return data.publicUrl;
-  }, [user, audioBuffer, audioFile]);
+  }, [user]);
 
-  const persistSession = useCallback(async (sessionDraft: Tables<"sessions">) => {
-    const inputAudioUrl = await ensureInputAudioUrl();
+  const persistSession = useCallback(async (
+    sessionDraft: Tables<"sessions">,
+    options: {
+      audioBuffer: AudioBuffer | null;
+      audioFile: File | null;
+      sessionAudioUrl: string | null;
+    },
+  ) => {
+    const inputAudioUrl = await ensureInputAudioUrl(options.audioFile, options.sessionAudioUrl);
     const outputAudioUrl = await ensureOutputAudioUrl(
+      options.audioBuffer,
+      options.audioFile,
       sessionDraft.iteration_round,
       sessionDraft.effect_params as unknown as EffectParams,
     );
@@ -468,19 +499,24 @@ const Studio = () => {
     return data;
   }, [user, ensureInputAudioUrl, ensureOutputAudioUrl]);
 
-  const enqueueSessionPersistence = useCallback((sessionDraft: Tables<"sessions">) => {
+  const enqueueSessionPersistence = useCallback((
+    sessionDraft: Tables<"sessions">,
+    options: {
+      audioBuffer: AudioBuffer | null;
+      audioFile: File | null;
+      sessionAudioUrl: string | null;
+    },
+  ) => {
     persistQueueRef.current = persistQueueRef.current
       .then(async () => {
-        const savedSession = await persistSession(sessionDraft);
+        while (isPlayingRef.current) {
+          await wait(150);
+        }
+        await waitForIdle();
+
+        const savedSession = await persistSession(sessionDraft, options);
         if (!savedSession) return;
         setIterations((prev) => replaceSessionInList(prev, savedSession));
-        setHistoryToneRefs((prev) => [
-          {
-            prompt: `${savedSession.prompt_text} ${savedSession.refinement_note ?? ""}`.trim(),
-            effectParams: savedSession.effect_params as unknown as EffectParams,
-          },
-          ...prev,
-        ].slice(0, 40));
       })
       .catch((error) => {
         console.error("Queued session persistence failed:", error);
@@ -533,14 +569,29 @@ const Studio = () => {
       setSessionId(sessionDraft.id);
       setIterationRound(1);
       setIterations([sessionDraft]);
-      enqueueSessionPersistence(sessionDraft);
+      setShowRefine(false);
+      setRefinementNote("");
+      setLoadedSessionLabel(null);
+      setComparePlayingId(null);
+      setHistoryToneRefs((prev) => [
+        {
+          prompt: `${sessionDraft.prompt_text} ${sessionDraft.refinement_note ?? ""}`.trim(),
+          effectParams: sessionDraft.effect_params as unknown as EffectParams,
+        },
+        ...prev,
+      ].slice(0, 40));
+      enqueueSessionPersistence(sessionDraft, {
+        audioBuffer,
+        audioFile,
+        sessionAudioUrl,
+      });
     } catch (error) {
       console.error("Generation failed:", error);
       toast.error("Generation failed. Try again with a shorter file or different prompt.");
     } finally {
       setIsGenerating(false);
     }
-  }, [prompt, isGenerating, audioBuffer, isPlaying, generationMode, params, historyToneRefs, sourceProfile, user?.id, inputSource, enqueueSessionPersistence]);
+  }, [prompt, isGenerating, audioBuffer, audioFile, sessionAudioUrl, isPlaying, generationMode, params, historyToneRefs, sourceProfile, user?.id, inputSource, enqueueSessionPersistence]);
 
   const handleRefine = useCallback(async () => {
     if (!refinementNote.trim() || iterationRound >= 5 || isGenerating || !audioBuffer) return;
@@ -581,7 +632,18 @@ const Studio = () => {
 
       setIterations((prev) => [...prev, sessionDraft]);
       setSessionId(sessionDraft.id);
-      enqueueSessionPersistence(sessionDraft);
+      setHistoryToneRefs((prev) => [
+        {
+          prompt: `${sessionDraft.prompt_text} ${sessionDraft.refinement_note ?? ""}`.trim(),
+          effectParams: sessionDraft.effect_params as unknown as EffectParams,
+        },
+        ...prev,
+      ].slice(0, 40));
+      enqueueSessionPersistence(sessionDraft, {
+        audioBuffer,
+        audioFile,
+        sessionAudioUrl,
+      });
 
       setRefinementNote("");
       setShowRefine(false);
@@ -595,7 +657,7 @@ const Studio = () => {
     } finally {
       setIsGenerating(false);
     }
-  }, [refinementNote, iterationRound, isGenerating, audioBuffer, params, prompt, sessionId, isPlaying, historyToneRefs, sourceProfile, generationMode, user?.id, inputSource, enqueueSessionPersistence]);
+  }, [refinementNote, iterationRound, isGenerating, audioBuffer, audioFile, sessionAudioUrl, params, prompt, sessionId, isPlaying, historyToneRefs, sourceProfile, generationMode, user?.id, inputSource, enqueueSessionPersistence]);
 
   const handlePlay = useCallback((mode: "wet" | "dry") => {
     if (!audioBuffer) return;
