@@ -18,6 +18,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { calculateSavings } from "@/components/studio/ValueSummary";
 import { appendGuestKnowledge, appendGuestSession, getGuestSessions, getGuestProfile, updateGuestProfile } from "@/lib/guestStore";
 import { isGuestAudioRef, loadGuestAudioBlob, parseGuestAudioRef, saveGuestAudioBlob } from "@/lib/guestAudioStore";
+import { audioBufferToWavBlob } from "@/lib/audioEncoding";
 import { toast } from "sonner";
 import type { Tables } from "@/integrations/supabase/types";
 import { useSearchParams } from "react-router-dom";
@@ -66,49 +67,10 @@ function fileNameFromUrl(url: string) {
   return parts[parts.length - 1] || "session-audio.webm";
 }
 
-function audioBufferToWavBytes(buffer: AudioBuffer): ArrayBuffer {
-  const numChannels = buffer.numberOfChannels;
-  const sampleRate = buffer.sampleRate;
-  const bitsPerSample = 24;
-  const bytesPerSample = bitsPerSample / 8;
-  const blockAlign = numChannels * bytesPerSample;
-  const length = buffer.length;
-  const dataSize = length * blockAlign;
-  const bufferSize = 44 + dataSize;
-  const wav = new ArrayBuffer(bufferSize);
-  const view = new DataView(wav);
-
-  const writeString = (offset: number, str: string) => {
-    for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
-  };
-
-  writeString(0, "RIFF");
-  view.setUint32(4, bufferSize - 8, true);
-  writeString(8, "WAVE");
-  writeString(12, "fmt ");
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, numChannels, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * blockAlign, true);
-  view.setUint16(32, blockAlign, true);
-  view.setUint16(34, bitsPerSample, true);
-  writeString(36, "data");
-  view.setUint32(40, dataSize, true);
-
-  let offset = 44;
-  for (let i = 0; i < length; i++) {
-    for (let ch = 0; ch < numChannels; ch++) {
-      const sample = Math.max(-1, Math.min(1, buffer.getChannelData(ch)[i]));
-      const intSample = Math.floor(sample * 8388607);
-      view.setUint8(offset, intSample & 0xff);
-      view.setUint8(offset + 1, (intSample >> 8) & 0xff);
-      view.setUint8(offset + 2, (intSample >> 16) & 0xff);
-      offset += 3;
-    }
-  }
-
-  return wav;
+function wait(ms: number) {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function createLocalId(prefix: string) {
@@ -408,8 +370,7 @@ const Studio = () => {
       processed = await renderProcessedBuffer(audioBuffer, forcedParams);
       console.warn("Output had low dry/wet delta; applied forced audible delta fallback.", delta);
     }
-    const wavBytes = audioBufferToWavBytes(processed);
-    const outputBlob = new Blob([wavBytes], { type: "audio/wav" });
+    const outputBlob = await audioBufferToWavBlob(processed);
 
     if (!user) {
       const outputName = `${inputStem}-round-${round}.wav`;
@@ -530,10 +491,10 @@ const Studio = () => {
   }, [user, audioBuffer, inputSource, generationMode, ensureInputAudioUrl, ensureOutputAudioUrl]);
 
   const handleGenerate = useCallback(async () => {
-    if (!prompt.trim()) return;
+    if (!prompt.trim() || isGenerating) return;
     setIsGenerating(true);
-
-    setTimeout(async () => {
+    try {
+      await wait(120);
       const parsedParams = generationMode === "modify"
         ? refineParamsFromPrompt(params, prompt)
         : parsePrompt(prompt);
@@ -548,27 +509,30 @@ const Studio = () => {
       setParams(newParams);
       setAiReasons(aiResult.reasons);
       setIsGenerated(true);
-      setIsGenerating(false);
 
       if (engineRef.current && isPlaying) {
         applyParams(engineRef.current, newParams);
       }
 
-      // Save to DB
       const session = await saveSession(prompt, newParams, 1, null, null);
       if (session) {
         setSessionId(session.id);
         setIterationRound(1);
         setIterations([session]);
       }
-    }, 600);
-  }, [prompt, isPlaying, saveSession, generationMode, params, historyToneRefs, sourceProfile]);
+    } catch (error) {
+      console.error("Generation failed:", error);
+      toast.error("Generation failed. Try again with a shorter file or different prompt.");
+    } finally {
+      setIsGenerating(false);
+    }
+  }, [prompt, isGenerating, isPlaying, saveSession, generationMode, params, historyToneRefs, sourceProfile]);
 
   const handleRefine = useCallback(async () => {
-    if (!refinementNote.trim() || iterationRound >= 5) return;
+    if (!refinementNote.trim() || iterationRound >= 5 || isGenerating) return;
     setIsGenerating(true);
-
-    setTimeout(async () => {
+    try {
+      await wait(120);
       const parsedParams = refineParamsFromPrompt(params, refinementNote);
       const aiResult = applyAiToneStrategy({
         prompt: refinementNote,
@@ -580,7 +544,6 @@ const Studio = () => {
       const newParams = aiResult.params;
       setParams(newParams);
       setAiReasons(aiResult.reasons);
-      setIsGenerating(false);
 
       const newRound = iterationRound + 1;
       setIterationRound(newRound);
@@ -597,8 +560,13 @@ const Studio = () => {
       if (engineRef.current && isPlaying) {
         applyParams(engineRef.current, newParams);
       }
-    }, 600);
-  }, [refinementNote, iterationRound, params, prompt, sessionId, isPlaying, saveSession, historyToneRefs, sourceProfile]);
+    } catch (error) {
+      console.error("Refinement failed:", error);
+      toast.error("Refinement failed. Try a shorter audio file or simpler refinement note.");
+    } finally {
+      setIsGenerating(false);
+    }
+  }, [refinementNote, iterationRound, isGenerating, params, prompt, sessionId, isPlaying, saveSession, historyToneRefs, sourceProfile]);
 
   const handlePlay = useCallback((mode: "wet" | "dry") => {
     if (!audioBuffer) return;
@@ -751,6 +719,7 @@ const Studio = () => {
                     value={prompt}
                     onChange={(e) => setPrompt(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && handleGenerate()}
+                    disabled={isGenerating}
                     placeholder="e.g. warm blues tone with smooth reverb"
                     className="flex-1 bg-transparent text-foreground font-mono text-xs sm:text-sm outline-none placeholder:text-muted-foreground/50"
                   />
@@ -833,15 +802,15 @@ const Studio = () => {
               <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
                 {!isPlaying ? (
                   <>
-                      <button onClick={() => handlePlay("wet")} className="w-full sm:w-auto justify-center flex items-center gap-2 px-5 py-2.5 rounded-xl bg-primary text-primary-foreground font-semibold text-sm hover:brightness-110 transition-all">
+                      <button disabled={isGenerating} onClick={() => handlePlay("wet")} className="w-full sm:w-auto justify-center flex items-center gap-2 px-5 py-2.5 rounded-xl bg-primary text-primary-foreground font-semibold text-sm hover:brightness-110 transition-all disabled:opacity-50">
                         <Play className="w-4 h-4" /> Play with Effects
                       </button>
-                      <button onClick={() => handlePlay("dry")} className="w-full sm:w-auto justify-center flex items-center gap-2 px-5 py-2.5 rounded-xl bg-muted text-foreground font-semibold text-sm hover:bg-muted/80 transition-all">
+                      <button disabled={isGenerating} onClick={() => handlePlay("dry")} className="w-full sm:w-auto justify-center flex items-center gap-2 px-5 py-2.5 rounded-xl bg-muted text-foreground font-semibold text-sm hover:bg-muted/80 transition-all disabled:opacity-50">
                         <Play className="w-4 h-4" /> Play Dry (A/B)
                       </button>
                   </>
                 ) : (
-                    <button onClick={handleStop} className="w-full sm:w-auto justify-center flex items-center gap-2 px-5 py-2.5 rounded-xl bg-destructive text-destructive-foreground font-semibold text-sm hover:brightness-110 transition-all">
+                    <button disabled={isGenerating} onClick={handleStop} className="w-full sm:w-auto justify-center flex items-center gap-2 px-5 py-2.5 rounded-xl bg-destructive text-destructive-foreground font-semibold text-sm hover:brightness-110 transition-all disabled:opacity-50">
                       <Square className="w-4 h-4" /> Stop
                     </button>
                 )}
@@ -857,6 +826,7 @@ const Studio = () => {
               <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
                 <button
                   onClick={() => { setShowRefine(false); toast.success("Tone saved! 🎸"); }}
+                  disabled={isGenerating}
                   className="w-full sm:w-auto justify-center flex items-center gap-2 px-5 py-2.5 rounded-xl bg-primary/20 text-primary font-semibold text-sm hover:bg-primary/30 transition-all border border-primary/30"
                 >
                   <Check className="w-4 h-4" /> This is perfect
@@ -864,6 +834,7 @@ const Studio = () => {
                 {iterationRound < 5 && (
                   <button
                     onClick={() => setShowRefine(!showRefine)}
+                    disabled={isGenerating}
                     className="w-full sm:w-auto justify-center flex items-center gap-2 px-5 py-2.5 rounded-xl bg-secondary/20 text-secondary font-semibold text-sm hover:bg-secondary/30 transition-all border border-secondary/30"
                   >
                     <RefreshCw className="w-4 h-4" /> Refine it ({5 - iterationRound} left)
@@ -871,6 +842,7 @@ const Studio = () => {
                 )}
                 <button
                   onClick={() => { setParams(defaultParams); setIsGenerated(false); setPrompt(""); setSessionId(null); setIterations([]); setIterationRound(1); setShowRefine(false); setLoadedSessionLabel(null); }}
+                  disabled={isGenerating}
                   className="w-full sm:w-auto sm:ml-auto justify-center flex items-center gap-2 px-4 py-2 rounded-xl bg-muted/50 text-muted-foreground text-sm hover:text-foreground transition-colors"
                 >
                   <RotateCcw className="w-3.5 h-3.5" /> Reset
@@ -890,6 +862,7 @@ const Studio = () => {
                             value={refinementNote}
                             onChange={(e) => setRefinementNote(e.target.value)}
                             onKeyDown={(e) => e.key === "Enter" && handleRefine()}
+                            disabled={isGenerating}
                             placeholder="e.g. make it more percussive, add breakdown at 0:45"
                             className="flex-1 bg-transparent text-foreground font-mono text-xs sm:text-sm outline-none placeholder:text-muted-foreground/50"
                           />
@@ -928,8 +901,9 @@ const Studio = () => {
                     {iterations.map((iter) => (
                       <button
                         key={iter.id}
+                        disabled={isGenerating}
                         onClick={() => handleCompareIterationPlay(iter)}
-                        className={`p-3 rounded-xl border text-sm font-medium transition-all text-left ${
+                        className={`p-3 rounded-xl border text-sm font-medium transition-all text-left disabled:opacity-50 ${
                           comparePlayingId === iter.id ? "border-secondary bg-secondary/10" : "border-border hover:border-secondary/50"
                         }`}
                       >
