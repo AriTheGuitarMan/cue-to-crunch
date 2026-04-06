@@ -17,6 +17,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { calculateSavings } from "@/components/studio/ValueSummary";
 import { appendGuestKnowledge, appendGuestSession, getGuestSessions, getGuestProfile, updateGuestProfile } from "@/lib/guestStore";
+import { isGuestAudioRef, loadGuestAudioBlob, parseGuestAudioRef, saveGuestAudioBlob } from "@/lib/guestAudioStore";
 import { toast } from "sonner";
 import type { Tables } from "@/integrations/supabase/types";
 import { useSearchParams } from "react-router-dom";
@@ -57,6 +58,10 @@ function sanitizeFileStem(name: string) {
 }
 
 function fileNameFromUrl(url: string) {
+  if (isGuestAudioRef(url)) {
+    const parsed = parseGuestAudioRef(url);
+    return parsed?.fileName ?? "session-audio.wav";
+  }
   const parts = decodeURIComponent(url).split("/");
   return parts[parts.length - 1] || "session-audio.webm";
 }
@@ -104,24 +109,6 @@ function audioBufferToWavBytes(buffer: AudioBuffer): ArrayBuffer {
   }
 
   return wav;
-}
-
-function fileToDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(new Error("Failed to convert file to data URL"));
-    reader.readAsDataURL(file);
-  });
-}
-
-function blobToDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(new Error("Failed to convert blob to data URL"));
-    reader.readAsDataURL(blob);
-  });
 }
 
 function createLocalId(prefix: string) {
@@ -273,11 +260,17 @@ const Studio = () => {
   const loadAudioFromSessionUrl = useCallback(async (url: string) => {
     let blob: Blob | null = null;
 
-    try {
-      const response = await fetch(url, { cache: "no-store" });
-      if (response.ok) blob = await response.blob();
-    } catch {
-      // fallback below
+    if (isGuestAudioRef(url)) {
+      blob = await loadGuestAudioBlob(url);
+    }
+
+    if (!blob) {
+      try {
+        const response = await fetch(url, { cache: "no-store" });
+        if (response.ok) blob = await response.blob();
+      } catch {
+        // fallback below
+      }
     }
 
     if (!blob) {
@@ -289,14 +282,6 @@ const Studio = () => {
     }
 
     if (!blob) throw new Error("Could not download session audio");
-
-    const extension = blob.type.includes("wav")
-      ? "wav"
-      : blob.type.includes("mpeg")
-        ? "mp3"
-        : blob.type.includes("ogg")
-          ? "ogg"
-          : "webm";
 
     const rawName = fileNameFromUrl(url);
     const restoredName = rawName.includes("__")
@@ -385,7 +370,7 @@ const Studio = () => {
     if (sessionAudioUrl) return sessionAudioUrl;
 
     if (!user) {
-      const localUrl = await fileToDataUrl(audioFile);
+      const localUrl = await saveGuestAudioBlob(audioFile, audioFile.name);
       setSessionAudioUrl(localUrl);
       return localUrl;
     }
@@ -427,7 +412,8 @@ const Studio = () => {
     const outputBlob = new Blob([wavBytes], { type: "audio/wav" });
 
     if (!user) {
-      return blobToDataUrl(outputBlob);
+      const outputName = `${inputStem}-round-${round}.wav`;
+      return saveGuestAudioBlob(outputBlob, outputName);
     }
 
     const outputFilePath = `${user.id}/outputs/${Date.now()}-${inputStem}-round-${round}.wav`;
@@ -484,7 +470,7 @@ const Studio = () => {
         lifetime_money_saved: profile.lifetime_money_saved + moneySaved,
       });
 
-      const tags = promptText.toLowerCase().split(/\\s+/).filter((w) => w.length > 3);
+      const tags = promptText.toLowerCase().split(/\s+/).filter((w) => w.length > 3);
       appendGuestKnowledge({
         id: createLocalId("guest-kb"),
         created_at: new Date().toISOString(),

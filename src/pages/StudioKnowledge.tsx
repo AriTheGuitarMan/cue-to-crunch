@@ -6,6 +6,8 @@ import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import type { Tables } from "@/integrations/supabase/types";
 import { getGuestKnowledge, getGuestSessions } from "@/lib/guestStore";
+import { getGuestAudioDisplayName, isGuestAudioRef } from "@/lib/guestAudioStore";
+import GuestAudioPlayer from "@/components/studio/GuestAudioPlayer";
 import { useNavigate } from "react-router-dom";
 
 const StudioKnowledge = () => {
@@ -16,6 +18,9 @@ const StudioKnowledge = () => {
   const [loading, setLoading] = useState(true);
 
   const displayNameFromAudioUrl = (url: string) => {
+    if (isGuestAudioRef(url)) {
+      return getGuestAudioDisplayName(url) ?? "guest-audio.wav";
+    }
     const raw = decodeURIComponent(url.split("/").pop() || "audio");
     const withOriginalMarker = raw.includes("__") ? raw.split("__").slice(1).join("__") : raw;
     return withOriginalMarker.replace(/^\d+-/, "");
@@ -129,7 +134,7 @@ const StudioKnowledge = () => {
                           <Upload className="w-3 h-3" />
                           Input File: {displayNameFromAudioUrl(inputAudioUrl)}
                         </p>
-                        <audio controls src={inputAudioUrl} className="w-full h-9" />
+                        <GuestAudioPlayer src={inputAudioUrl} className="w-full h-9" />
                       </div>
                     )}
                     {outputRounds.length > 0 && (
@@ -145,7 +150,7 @@ const StudioKnowledge = () => {
                               {round.isLegacyFallback ? " (legacy)" : ""}
                             </p>
                             {round.outputAudioUrl && (
-                              <audio controls src={round.outputAudioUrl} className="w-full h-9" />
+                              <GuestAudioPlayer src={round.outputAudioUrl} className="w-full h-9" />
                             )}
                           </div>
                         ))}

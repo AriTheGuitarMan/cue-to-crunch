@@ -20,6 +20,13 @@ function readJson<T>(key: string, fallback: T): T {
   try {
     const raw = localStorage.getItem(key);
     if (!raw) return fallback;
+
+    // Safety cleanup for legacy builds that stored full base64 audio in localStorage.
+    if (key === SESSIONS_KEY && raw.includes("data:audio")) {
+      localStorage.removeItem(SESSIONS_KEY);
+      return fallback;
+    }
+
     return JSON.parse(raw) as T;
   } catch {
     return fallback;
@@ -41,7 +48,7 @@ export function saveGuestSessions(sessions: Tables<"sessions">[]) {
 export function appendGuestSession(session: Tables<"sessions">) {
   const sessions = getGuestSessions();
   sessions.unshift(session);
-  saveGuestSessions(sessions);
+  saveGuestSessions(sessions.slice(0, 100));
 }
 
 export function getGuestKnowledge() {
