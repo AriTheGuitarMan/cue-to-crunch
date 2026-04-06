@@ -661,6 +661,11 @@ const Studio = () => {
 
   const handlePlay = useCallback((mode: "wet" | "dry") => {
     if (!audioBuffer) return;
+    if (compareEngineRef.current) {
+      destroyEngine(compareEngineRef.current);
+      compareEngineRef.current = null;
+      setComparePlayingId(null);
+    }
     if (engineRef.current) {
       destroyEngine(engineRef.current);
       engineRef.current = null;
@@ -670,12 +675,24 @@ const Studio = () => {
     const source = mode === "wet" ? connectAndPlay(engine, params) : playDry(engine);
     setIsPlaying(true);
     setPlayMode(mode);
-    source.onended = () => setIsPlaying(false);
+    source.onended = () => {
+      if (engineRef.current === engine) {
+        destroyEngine(engine);
+        engineRef.current = null;
+      }
+      setIsPlaying(false);
+    };
   }, [audioBuffer, params]);
 
   const handleStop = useCallback(() => {
     if (engineRef.current) {
-      stopPlayback(engineRef.current);
+      destroyEngine(engineRef.current);
+      engineRef.current = null;
+    }
+    if (compareEngineRef.current) {
+      destroyEngine(compareEngineRef.current);
+      compareEngineRef.current = null;
+      setComparePlayingId(null);
     }
     setIsPlaying(false);
   }, []);
@@ -692,7 +709,13 @@ const Studio = () => {
     compareEngineRef.current = engine;
     const source = connectAndPlay(engine, iteration.effect_params as unknown as EffectParams);
     setComparePlayingId(iteration.id);
-    source.onended = () => setComparePlayingId(null);
+    source.onended = () => {
+      if (compareEngineRef.current === engine) {
+        destroyEngine(engine);
+        compareEngineRef.current = null;
+      }
+      setComparePlayingId(null);
+    };
   }, [audioBuffer]);
 
   const handleParamsChange = useCallback((newParams: EffectParams) => {
