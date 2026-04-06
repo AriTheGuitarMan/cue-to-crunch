@@ -1,9 +1,9 @@
-import { Plus, History, Brain, Settings, Clock, DollarSign, LogOut, Guitar } from "lucide-react";
+import { Plus, History, Brain, Settings, Clock, DollarSign, Guitar } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useAuth } from "@/hooks/useAuth";
-import { useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { getGuestProfile, getGuestSessions } from "@/lib/guestStore";
 import {
   Sidebar,
   SidebarContent,
@@ -27,13 +27,36 @@ const navItems = [
 export function AppSidebar() {
   const { state } = useSidebar();
   const collapsed = state === "collapsed";
-  const { user, signOut } = useAuth();
-  const navigate = useNavigate();
+  const { user } = useAuth();
   const [savings, setSavings] = useState({ time: 0, money: 0 });
   const [analytics, setAnalytics] = useState({ sessions: 0, avgMinutes: 0, monthMoney: 0 });
 
   useEffect(() => {
-    if (!user) return;
+    if (!user) {
+      const profile = getGuestProfile();
+      const sessions = getGuestSessions();
+      const now = new Date();
+      const currentMonth = now.getMonth();
+      const currentYear = now.getFullYear();
+      const monthMoney = sessions
+        .filter((s) => {
+          const created = new Date(s.created_at);
+          return created.getMonth() === currentMonth && created.getFullYear() === currentYear;
+        })
+        .reduce((sum, s) => sum + Number(s.money_saved ?? 0), 0);
+      const totalTime = sessions.reduce((sum, s) => sum + Number(s.time_saved_minutes ?? 0), 0);
+      setSavings({
+        time: profile.lifetime_time_saved_minutes,
+        money: profile.lifetime_money_saved,
+      });
+      setAnalytics({
+        sessions: sessions.length,
+        avgMinutes: sessions.length > 0 ? totalTime / sessions.length : 0,
+        monthMoney,
+      });
+      return;
+    }
+
     supabase
       .from("profiles")
       .select("lifetime_time_saved_minutes, lifetime_money_saved")
@@ -71,11 +94,6 @@ export function AppSidebar() {
         });
       });
   }, [user]);
-
-  const handleSignOut = async () => {
-    await signOut();
-    navigate("/");
-  };
 
   return (
     <Sidebar collapsible="icon">
@@ -133,16 +151,13 @@ export function AppSidebar() {
             <p className="text-[10px] text-muted-foreground">
               This month: ${analytics.monthMoney.toFixed(0)}
             </p>
+            {!user && (
+              <p className="text-[10px] text-muted-foreground border-t border-border/40 pt-1">
+                Guest mode: data is saved locally on this device
+              </p>
+            )}
           </div>
         )}
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton onClick={handleSignOut}>
-              <LogOut className="mr-2 h-4 w-4" />
-              {!collapsed && <span>Sign Out</span>}
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
       </SidebarFooter>
     </Sidebar>
   );

@@ -5,6 +5,7 @@ import StudioLayout from "@/components/studio/StudioLayout";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import type { Tables } from "@/integrations/supabase/types";
+import { getGuestKnowledge, getGuestSessions } from "@/lib/guestStore";
 import { useNavigate } from "react-router-dom";
 
 const StudioKnowledge = () => {
@@ -21,7 +22,14 @@ const StudioKnowledge = () => {
   };
 
   useEffect(() => {
-    if (!user) return;
+    setLoading(true);
+    if (!user) {
+      setEntries(getGuestKnowledge());
+      setSessions(getGuestSessions());
+      setLoading(false);
+      return;
+    }
+
     supabase
       .from("knowledge_base")
       .select("*")

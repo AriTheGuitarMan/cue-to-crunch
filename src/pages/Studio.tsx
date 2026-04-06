@@ -11,10 +11,12 @@ import LiveRecorder from "@/components/studio/LiveRecorder";
 import ValueSummary from "@/components/studio/ValueSummary";
 import DAWExport from "@/components/studio/DAWExport";
 import IterationHistory from "@/components/studio/IterationHistory";
+import GrowthAutomationSuite from "@/components/studio/GrowthAutomationSuite";
 import StudioLayout from "@/components/studio/StudioLayout";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { calculateSavings } from "@/components/studio/ValueSummary";
+import { appendGuestKnowledge, appendGuestSession, getGuestSessions, getGuestProfile, updateGuestProfile } from "@/lib/guestStore";
 import { toast } from "sonner";
 import type { Tables } from "@/integrations/supabase/types";
 import { useSearchParams } from "react-router-dom";
@@ -102,6 +104,29 @@ function audioBufferToWavBytes(buffer: AudioBuffer): ArrayBuffer {
   }
 
   return wav;
+}
+
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error("Failed to convert file to data URL"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error("Failed to convert blob to data URL"));
+    reader.readAsDataURL(blob);
+  });
+}
+
+function createLocalId(prefix: string) {
+  const random = Math.random().toString(36).slice(2, 10);
+  return `${prefix}-${Date.now()}-${random}`;
 }
 
 type SessionAudioRef = {
@@ -193,7 +218,18 @@ const Studio = () => {
   }, [audioBuffer]);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user) {
+      const refs = getGuestSessions()
+        .filter((row) => !!row.effect_params)
+        .slice(0, 40)
+        .map((row) => ({
+          prompt: `${row.prompt_text} ${row.refinement_note ?? ""}`.trim(),
+          effectParams: row.effect_params as unknown as EffectParams,
+        }));
+      setHistoryToneRefs(refs);
+      return;
+    }
+
     supabase
       .from("sessions")
       .select("prompt_text, refinement_note, effect_params")
@@ -271,22 +307,16 @@ const Studio = () => {
 
   useEffect(() => {
     const loadSessionId = searchParams.get("loadSession");
-    if (!user || !loadSessionId) return;
+    if (!loadSessionId) return;
     let cancelled = false;
 
     const loadSessionWithAudio = async () => {
-      const { data } = await supabase
-        .from("sessions")
-        .select("*")
-        .eq("user_id", user.id)
-        .eq("id", loadSessionId)
-        .maybeSingle();
+      const allSessions: Tables<"sessions">[] = user
+        ? (await supabase.from("sessions").select("*").eq("user_id", user.id)).data ?? []
+        : getGuestSessions();
+      const data = allSessions.find((session) => session.id === loadSessionId);
       if (!data || cancelled) return;
 
-      const { data: allSessions } = await supabase
-        .from("sessions")
-        .select("*")
-        .eq("user_id", user.id);
       const byId = new Map((allSessions ?? []).map((s) => [s.id, s]));
       const getRootId = (session: Tables<"sessions">) => {
         let cursor: Tables<"sessions"> | undefined = session;
@@ -351,8 +381,14 @@ const Studio = () => {
   }, [handleFileUpload]);
 
   const ensureInputAudioUrl = useCallback(async () => {
-    if (!user || !audioFile) return null;
+    if (!audioFile) return null;
     if (sessionAudioUrl) return sessionAudioUrl;
+
+    if (!user) {
+      const localUrl = await fileToDataUrl(audioFile);
+      setSessionAudioUrl(localUrl);
+      return localUrl;
+    }
 
     const originalName = audioFile.name.replace(/[\\/]/g, "_");
     const filePath = `${user.id}/inputs/${Date.now()}__${originalName}`;
@@ -371,7 +407,7 @@ const Studio = () => {
   }, [user, audioFile, sessionAudioUrl]);
 
   const ensureOutputAudioUrl = useCallback(async (round: number, effectParams: EffectParams) => {
-    if (!user || !audioBuffer) return null;
+    if (!audioBuffer) return null;
     const inputStem = audioFile ? sanitizeFileStem(audioFile.name) : "output";
     let processed = await renderProcessedBuffer(audioBuffer, effectParams);
     const delta = measureDryWetDelta(extractMono(audioBuffer), extractMono(processed));
@@ -389,6 +425,11 @@ const Studio = () => {
     }
     const wavBytes = audioBufferToWavBytes(processed);
     const outputBlob = new Blob([wavBytes], { type: "audio/wav" });
+
+    if (!user) {
+      return blobToDataUrl(outputBlob);
+    }
+
     const outputFilePath = `${user.id}/outputs/${Date.now()}-${inputStem}-round-${round}.wav`;
     const { error } = await supabase.storage.from("audio-files").upload(outputFilePath, outputBlob, {
       contentType: "audio/wav",
@@ -409,7 +450,7 @@ const Studio = () => {
     parentId: string | null,
     refNote: string | null
   ) => {
-    if (!user || !audioBuffer) return null;
+    if (!audioBuffer) return null;
     const inputAudioUrl = await ensureInputAudioUrl();
     const outputAudioUrl = await ensureOutputAudioUrl(round, effectParams);
     const { timeSavedMinutes, moneySaved } = calculateSavings(audioBuffer.duration, {
@@ -417,6 +458,44 @@ const Studio = () => {
       iterationRound: round,
       mode: generationMode,
     });
+
+    if (!user) {
+      const newSession: Tables<"sessions"> = {
+        id: createLocalId("guest-session"),
+        created_at: new Date().toISOString(),
+        user_id: "guest-local",
+        prompt_text: promptText,
+        refinement_note: refNote,
+        input_source: inputSource,
+        input_audio_url: inputAudioUrl,
+        output_audio_url: outputAudioUrl,
+        duration_seconds: audioBuffer.duration,
+        time_saved_minutes: timeSavedMinutes,
+        money_saved: moneySaved,
+        iteration_round: round,
+        parent_session_id: parentId,
+        effect_params: JSON.parse(JSON.stringify(effectParams)),
+      };
+      appendGuestSession(newSession);
+
+      const profile = getGuestProfile();
+      updateGuestProfile({
+        lifetime_time_saved_minutes: profile.lifetime_time_saved_minutes + timeSavedMinutes,
+        lifetime_money_saved: profile.lifetime_money_saved + moneySaved,
+      });
+
+      const tags = promptText.toLowerCase().split(/\\s+/).filter((w) => w.length > 3);
+      appendGuestKnowledge({
+        id: createLocalId("guest-kb"),
+        created_at: new Date().toISOString(),
+        user_id: "guest-local",
+        session_id: newSession.id,
+        summary: `${promptText}${refNote ? ` → ${refNote}` : ""}`,
+        tags: tags.slice(0, 10),
+      });
+
+      return newSession;
+    }
 
     const { data, error } = await supabase.from("sessions").insert([{
       user_id: user.id,
@@ -896,6 +975,13 @@ const Studio = () => {
             </motion.section>
           )}
         </AnimatePresence>
+
+        <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
+          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+            Growth AI Ops
+          </h2>
+          <GrowthAutomationSuite />
+        </motion.section>
       </div>
     </StudioLayout>
   );

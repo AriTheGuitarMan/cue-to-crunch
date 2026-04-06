@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { Settings, User } from "lucide-react";
+import { Settings } from "lucide-react";
 import StudioLayout from "@/components/studio/StudioLayout";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
+import { getGuestProfile, updateGuestProfile } from "@/lib/guestStore";
 import { toast } from "sonner";
 
 const StudioSettings = () => {
@@ -11,7 +12,10 @@ const StudioSettings = () => {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user) {
+      setDisplayName(getGuestProfile().display_name);
+      return;
+    }
     supabase
       .from("profiles")
       .select("display_name")
@@ -23,7 +27,11 @@ const StudioSettings = () => {
   }, [user]);
 
   const handleSave = async () => {
-    if (!user) return;
+    if (!user) {
+      updateGuestProfile({ display_name: displayName || "Guest Producer" });
+      toast.success("Guest settings saved");
+      return;
+    }
     setSaving(true);
     const { error } = await supabase
       .from("profiles")
@@ -49,7 +57,7 @@ const StudioSettings = () => {
           <div className="space-y-3">
             <div>
               <label className="text-xs text-muted-foreground">Email</label>
-              <p className="text-sm text-foreground font-mono">{user?.email}</p>
+              <p className="text-sm text-foreground font-mono">{user?.email ?? "guest@local-mode"}</p>
             </div>
             <div>
               <label className="text-xs text-muted-foreground mb-1 block">Display Name</label>

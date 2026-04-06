@@ -5,6 +5,7 @@ import StudioLayout from "@/components/studio/StudioLayout";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import type { Tables } from "@/integrations/supabase/types";
+import { getGuestSessions } from "@/lib/guestStore";
 import { useNavigate } from "react-router-dom";
 
 function displayNameFromAudioUrl(url: string) {
@@ -21,8 +22,18 @@ const StudioHistory = () => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!user) return;
     const fetchSessions = async () => {
+      setLoading(true);
+      if (!user) {
+        const localSessions = getGuestSessions();
+        const filtered = search.trim()
+          ? localSessions.filter((s) => s.prompt_text.toLowerCase().includes(search.toLowerCase()))
+          : localSessions;
+        setSessions(filtered);
+        setLoading(false);
+        return;
+      }
+
       let query = supabase
         .from("sessions")
         .select("*")
