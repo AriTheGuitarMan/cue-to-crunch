@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { Guitar, Mail, Lock, ArrowRight } from "lucide-react";
+import { Guitar, Mail, Lock, ArrowRight, KeyRound } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { lovable } from "@/integrations/lovable";
 import { useNavigate } from "react-router-dom";
@@ -8,8 +8,11 @@ import { toast } from "sonner";
 
 const Auth = () => {
   const [isLogin, setIsLogin] = useState(true);
+  const [authMethod, setAuthMethod] = useState<"password" | "code">("password");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [code, setCode] = useState("");
+  const [codeSent, setCodeSent] = useState(false);
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
@@ -17,18 +20,42 @@ const Auth = () => {
     e.preventDefault();
     setLoading(true);
     try {
-      if (isLogin) {
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
-        if (error) throw error;
-        navigate("/studio");
+      if (authMethod === "code") {
+        if (!codeSent) {
+          const { error } = await supabase.auth.signInWithOtp({
+            email,
+            options: {
+              emailRedirectTo: `${window.location.origin}/studio`,
+              shouldCreateUser: !isLogin,
+            },
+          });
+          if (error) throw error;
+          setCodeSent(true);
+          toast.success("Authentication code sent to your email.");
+        } else {
+          const { error } = await supabase.auth.verifyOtp({
+            email,
+            token: code.trim(),
+            type: "email",
+          });
+          if (error) throw error;
+          toast.success("Signed in successfully.");
+          navigate("/studio");
+        }
       } else {
-        const { error } = await supabase.auth.signUp({
-          email,
-          password,
-          options: { emailRedirectTo: window.location.origin },
-        });
-        if (error) throw error;
-        toast.success("Check your email to confirm your account");
+        if (isLogin) {
+          const { error } = await supabase.auth.signInWithPassword({ email, password });
+          if (error) throw error;
+          navigate("/studio");
+        } else {
+          const { error } = await supabase.auth.signUp({
+            email,
+            password,
+            options: { emailRedirectTo: `${window.location.origin}/studio` },
+          });
+          if (error) throw error;
+          toast.success("Sign-up created. Check your email to confirm.");
+        }
       }
     } catch (err: any) {
       toast.error(err.message);
@@ -87,6 +114,22 @@ const Auth = () => {
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-3">
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <button
+                type="button"
+                onClick={() => { setAuthMethod("password"); setCodeSent(false); setCode(""); }}
+                className={`px-3 py-2 rounded-lg ${authMethod === "password" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}
+              >
+                Password
+              </button>
+              <button
+                type="button"
+                onClick={() => { setAuthMethod("code"); setPassword(""); }}
+                className={`px-3 py-2 rounded-lg ${authMethod === "code" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}
+              >
+                Email Code
+              </button>
+            </div>
             <div className="relative">
               <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               <input
@@ -98,26 +141,57 @@ const Auth = () => {
                 className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-muted text-foreground text-sm outline-none focus:ring-2 ring-primary/50 placeholder:text-muted-foreground/50"
               />
             </div>
-            <div className="relative">
-              <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Password"
-                required
-                minLength={6}
-                className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-muted text-foreground text-sm outline-none focus:ring-2 ring-primary/50 placeholder:text-muted-foreground/50"
-              />
-            </div>
+            {authMethod === "password" ? (
+              <div className="relative">
+                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Password"
+                  required
+                  minLength={6}
+                  className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-muted text-foreground text-sm outline-none focus:ring-2 ring-primary/50 placeholder:text-muted-foreground/50"
+                />
+              </div>
+            ) : codeSent ? (
+              <div className="relative">
+                <KeyRound className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                <input
+                  type="text"
+                  value={code}
+                  onChange={(e) => setCode(e.target.value)}
+                  placeholder="Enter 6-digit email code"
+                  required
+                  className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-muted text-foreground text-sm outline-none focus:ring-2 ring-primary/50 placeholder:text-muted-foreground/50"
+                />
+              </div>
+            ) : null}
             <button
               type="submit"
               disabled={loading}
               className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-primary text-primary-foreground font-semibold text-sm hover:brightness-110 transition-all disabled:opacity-50"
             >
-              {loading ? "Loading..." : isLogin ? "Sign In" : "Sign Up"}
+              {loading
+                ? "Loading..."
+                : authMethod === "code"
+                  ? codeSent
+                    ? "Verify Code"
+                    : "Send Code"
+                  : isLogin
+                    ? "Sign In"
+                    : "Sign Up"}
               <ArrowRight className="w-4 h-4" />
             </button>
+            {authMethod === "code" && codeSent && (
+              <button
+                type="button"
+                onClick={() => setCodeSent(false)}
+                className="w-full text-xs text-muted-foreground hover:text-foreground"
+              >
+                Send a new code
+              </button>
+            )}
           </form>
         </div>
 

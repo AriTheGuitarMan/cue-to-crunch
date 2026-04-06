@@ -4,6 +4,7 @@ import { Upload, Play, Square, Zap, RotateCcw, Mic, FileAudio, Check, RefreshCw 
 import { parsePrompt, refineParamsFromPrompt, EffectParams, defaultParams } from "@/lib/effectPresets";
 import { loadAudioFile, createEngine, connectAndPlay, playDry, stopPlayback, destroyEngine, applyParams, renderProcessedBuffer, AudioEngineState } from "@/lib/audioEngine";
 import { analyzeSourceAudio, applyAiToneStrategy, type SourceAudioProfile } from "@/lib/aiToneEngine";
+import { extractMono, isAudibleDelta, measureDryWetDelta } from "@/lib/audioQuality";
 import Waveform from "@/components/studio/Waveform";
 import EffectKnobs from "@/components/studio/EffectKnobs";
 import LiveRecorder from "@/components/studio/LiveRecorder";
@@ -372,7 +373,20 @@ const Studio = () => {
   const ensureOutputAudioUrl = useCallback(async (round: number, effectParams: EffectParams) => {
     if (!user || !audioBuffer) return null;
     const inputStem = audioFile ? sanitizeFileStem(audioFile.name) : "output";
-    const processed = await renderProcessedBuffer(audioBuffer, effectParams);
+    let processed = await renderProcessedBuffer(audioBuffer, effectParams);
+    const delta = measureDryWetDelta(extractMono(audioBuffer), extractMono(processed));
+    if (!isAudibleDelta(delta)) {
+      const forcedParams: EffectParams = {
+        ...effectParams,
+        distortion: Math.min(1, effectParams.distortion + 0.2),
+        overdrive: Math.min(1, effectParams.overdrive + 0.2),
+        reverb: Math.min(1, effectParams.reverb + 0.12),
+        compression: Math.min(1, effectParams.compression + 0.1),
+        gain: Math.min(2, effectParams.gain + 0.15),
+      };
+      processed = await renderProcessedBuffer(audioBuffer, forcedParams);
+      console.warn("Output had low dry/wet delta; applied forced audible delta fallback.", delta);
+    }
     const wavBytes = audioBufferToWavBytes(processed);
     const outputBlob = new Blob([wavBytes], { type: "audio/wav" });
     const outputFilePath = `${user.id}/outputs/${Date.now()}-${inputStem}-round-${round}.wav`;
