@@ -74,7 +74,13 @@ vi.mock("@/integrations/supabase/client", () => ({
 
 vi.mock("@/lib/audioEngine", () => ({
   loadAudioFile: vi.fn(async () => fakeBuffer),
-  createEngine: vi.fn(() => ({ analyser: null })),
+  createEngine: vi.fn(() => ({
+    analyser: null,
+    ctx: {
+      state: "running",
+      resume: vi.fn(async () => undefined),
+    },
+  })),
   connectAndPlay: connectAndPlayMock,
   playDry: playDryMock,
   stopPlayback: stopPlaybackMock,

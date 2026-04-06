@@ -16,7 +16,7 @@ import StudioLayout from "@/components/studio/StudioLayout";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { calculateSavings } from "@/components/studio/ValueSummary";
-import { appendGuestKnowledge, appendGuestSession, getGuestSessions, getGuestProfile, updateGuestProfile } from "@/lib/guestStore";
+import { appendGuestKnowledge, appendGuestSession, getGuestSessions, getGuestProfile, replaceGuestSession, updateGuestProfile } from "@/lib/guestStore";
 import { isGuestAudioRef, loadGuestAudioBlob, parseGuestAudioRef, saveGuestAudioBlob } from "@/lib/guestAudioStore";
 import { audioBufferToWavBlob } from "@/lib/audioEncoding";
 import { createSessionDraft, replaceSessionInList } from "@/lib/studioSessions";
@@ -83,6 +83,10 @@ function waitForIdle(timeout = 2000) {
 
     window.requestIdleCallback(() => resolve(), { timeout });
   });
+}
+
+function markInteraction(ref: { current: number }) {
+  ref.current = Date.now();
 }
 
 type SessionAudioRef = {
@@ -159,6 +163,7 @@ const Studio = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const persistQueueRef = useRef<Promise<void>>(Promise.resolve());
   const isPlayingRef = useRef(false);
+  const lastInteractionRef = useRef(Date.now());
 
   useEffect(() => {
     return () => {
@@ -178,6 +183,13 @@ const Studio = () => {
   useEffect(() => {
     isPlayingRef.current = isPlaying;
   }, [isPlaying]);
+
+  const waitForInteractionPause = useCallback(async (minimumIdleMs = 4000) => {
+    while (isPlayingRef.current || Date.now() - lastInteractionRef.current < minimumIdleMs) {
+      await wait(200);
+    }
+    await waitForIdle();
+  }, []);
 
   useEffect(() => {
     if (!user) {
@@ -409,7 +421,7 @@ const Studio = () => {
     return data.publicUrl;
   }, [user]);
 
-  const persistSession = useCallback(async (
+  const persistSessionMetadata = useCallback(async (
     sessionDraft: Tables<"sessions">,
     options: {
       audioBuffer: AudioBuffer | null;
@@ -418,16 +430,9 @@ const Studio = () => {
     },
   ) => {
     const inputAudioUrl = await ensureInputAudioUrl(options.audioFile, options.sessionAudioUrl);
-    const outputAudioUrl = await ensureOutputAudioUrl(
-      options.audioBuffer,
-      options.audioFile,
-      sessionDraft.iteration_round,
-      sessionDraft.effect_params as unknown as EffectParams,
-    );
     const sessionToSave: Tables<"sessions"> = {
       ...sessionDraft,
       input_audio_url: inputAudioUrl,
-      output_audio_url: outputAudioUrl,
     };
 
     if (!user) {
@@ -497,7 +502,48 @@ const Studio = () => {
     });
 
     return data;
-  }, [user, ensureInputAudioUrl, ensureOutputAudioUrl]);
+  }, [user, ensureInputAudioUrl]);
+
+  const persistSessionOutput = useCallback(async (
+    sessionDraft: Tables<"sessions">,
+    options: {
+      audioBuffer: AudioBuffer | null;
+      audioFile: File | null;
+    },
+  ) => {
+    const outputAudioUrl = await ensureOutputAudioUrl(
+      options.audioBuffer,
+      options.audioFile,
+      sessionDraft.iteration_round,
+      sessionDraft.effect_params as unknown as EffectParams,
+    );
+    if (!outputAudioUrl) return null;
+
+    const sessionWithOutput: Tables<"sessions"> = {
+      ...sessionDraft,
+      output_audio_url: outputAudioUrl,
+    };
+
+    if (!user) {
+      replaceGuestSession(sessionWithOutput);
+      return sessionWithOutput;
+    }
+
+    const { data, error } = await supabase
+      .from("sessions")
+      .update({ output_audio_url: outputAudioUrl })
+      .eq("user_id", user.id)
+      .eq("id", sessionDraft.id)
+      .select()
+      .single();
+
+    if (error) {
+      console.error("Output session update failed:", error);
+      return null;
+    }
+
+    return data;
+  }, [user, ensureOutputAudioUrl]);
 
   const enqueueSessionPersistence = useCallback((
     sessionDraft: Tables<"sessions">,
@@ -509,23 +555,32 @@ const Studio = () => {
   ) => {
     persistQueueRef.current = persistQueueRef.current
       .then(async () => {
-        while (isPlayingRef.current) {
-          await wait(150);
-        }
-        await waitForIdle();
-
-        const savedSession = await persistSession(sessionDraft, options);
+        const savedSession = await persistSessionMetadata(sessionDraft, options);
         if (!savedSession) return;
+
         setIterations((prev) => replaceSessionInList(prev, savedSession));
+        if (savedSession.input_audio_url && !sessionAudioUrl) {
+          setSessionAudioUrl(savedSession.input_audio_url);
+        }
+
+        await waitForInteractionPause();
+
+        const savedOutputSession = await persistSessionOutput(savedSession, {
+          audioBuffer: options.audioBuffer,
+          audioFile: options.audioFile,
+        });
+        if (!savedOutputSession) return;
+        setIterations((prev) => replaceSessionInList(prev, savedOutputSession));
       })
       .catch((error) => {
         console.error("Queued session persistence failed:", error);
         toast.error("Session save failed, but the current tone is still active.");
       });
-  }, [persistSession]);
+  }, [persistSessionMetadata, sessionAudioUrl, waitForInteractionPause, persistSessionOutput]);
 
   const handleGenerate = useCallback(async () => {
     if (!prompt.trim() || isGenerating || !audioBuffer) return;
+    markInteraction(lastInteractionRef);
     setIsGenerating(true);
     try {
       await wait(120);
@@ -595,6 +650,7 @@ const Studio = () => {
 
   const handleRefine = useCallback(async () => {
     if (!refinementNote.trim() || iterationRound >= 5 || isGenerating || !audioBuffer) return;
+    markInteraction(lastInteractionRef);
     setIsGenerating(true);
     try {
       await wait(120);
@@ -659,8 +715,9 @@ const Studio = () => {
     }
   }, [refinementNote, iterationRound, isGenerating, audioBuffer, audioFile, sessionAudioUrl, params, prompt, sessionId, isPlaying, historyToneRefs, sourceProfile, generationMode, user?.id, inputSource, enqueueSessionPersistence]);
 
-  const handlePlay = useCallback((mode: "wet" | "dry") => {
+  const handlePlay = useCallback(async (mode: "wet" | "dry") => {
     if (!audioBuffer) return;
+    markInteraction(lastInteractionRef);
     if (compareEngineRef.current) {
       destroyEngine(compareEngineRef.current);
       compareEngineRef.current = null;
@@ -672,6 +729,9 @@ const Studio = () => {
     }
     const engine = createEngine(audioBuffer);
     engineRef.current = engine;
+    if (engine.ctx && engine.ctx.state !== "running") {
+      await engine.ctx.resume();
+    }
     const source = mode === "wet" ? connectAndPlay(engine, params) : playDry(engine);
     setIsPlaying(true);
     setPlayMode(mode);
@@ -685,6 +745,7 @@ const Studio = () => {
   }, [audioBuffer, params]);
 
   const handleStop = useCallback(() => {
+    markInteraction(lastInteractionRef);
     if (engineRef.current) {
       destroyEngine(engineRef.current);
       engineRef.current = null;
@@ -699,6 +760,7 @@ const Studio = () => {
 
   const handleCompareIterationPlay = useCallback((iteration: Tables<"sessions">) => {
     if (!audioBuffer || !iteration.effect_params) return;
+    markInteraction(lastInteractionRef);
     if (compareEngineRef.current) destroyEngine(compareEngineRef.current);
     if (engineRef.current) {
       stopPlayback(engineRef.current);
@@ -719,6 +781,7 @@ const Studio = () => {
   }, [audioBuffer]);
 
   const handleParamsChange = useCallback((newParams: EffectParams) => {
+    markInteraction(lastInteractionRef);
     setParams(newParams);
     if (engineRef.current && isPlaying && playMode === "wet") {
       applyParams(engineRef.current, newParams);
@@ -726,6 +789,7 @@ const Studio = () => {
   }, [isPlaying, playMode]);
 
   const handleSelectIteration = useCallback((iteration: Tables<"sessions">) => {
+    markInteraction(lastInteractionRef);
     if (iteration.effect_params) {
       setParams(iteration.effect_params as unknown as EffectParams);
     }

@@ -51,6 +51,14 @@ export function appendGuestSession(session: Tables<"sessions">) {
   saveGuestSessions(sessions.slice(0, 100));
 }
 
+export function replaceGuestSession(session: Tables<"sessions">) {
+  const sessions = getGuestSessions();
+  const next = sessions.map((existing) => (
+    existing.id === session.id ? session : existing
+  ));
+  saveGuestSessions(next);
+}
+
 export function getGuestKnowledge() {
   return readJson<Tables<"knowledge_base">[]>(KNOWLEDGE_KEY, []);
 }
