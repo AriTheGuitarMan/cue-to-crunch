@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Upload, Play, Square, Zap, RotateCcw, Mic, FileAudio, Check, RefreshCw } from "lucide-react";
 import { parsePrompt, refineParamsFromPrompt, EffectParams, defaultParams } from "@/lib/effectPresets";
 import { loadAudioFile, createEngine, connectAndPlay, playDry, stopPlayback, destroyEngine, applyParams, renderProcessedBuffer, AudioEngineState } from "@/lib/audioEngine";
+import { analyzeSourceAudio, applyAiToneStrategy, type SourceAudioProfile } from "@/lib/aiToneEngine";
 import Waveform from "@/components/studio/Waveform";
 import EffectKnobs from "@/components/studio/EffectKnobs";
 import LiveRecorder from "@/components/studio/LiveRecorder";
@@ -167,6 +168,9 @@ const Studio = () => {
   const [comparePlayingId, setComparePlayingId] = useState<string | null>(null);
   const [loadedSessionLabel, setLoadedSessionLabel] = useState<string | null>(null);
   const [sessionAudioUrl, setSessionAudioUrl] = useState<string | null>(null);
+  const [aiReasons, setAiReasons] = useState<string[]>([]);
+  const [sourceProfile, setSourceProfile] = useState<SourceAudioProfile | null>(null);
+  const [historyToneRefs, setHistoryToneRefs] = useState<Array<{ prompt: string; effectParams: EffectParams }>>([]);
 
   const engineRef = useRef<AudioEngineState | null>(null);
   const compareEngineRef = useRef<AudioEngineState | null>(null);
@@ -178,6 +182,33 @@ const Studio = () => {
       if (compareEngineRef.current) destroyEngine(compareEngineRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    if (!audioBuffer) {
+      setSourceProfile(null);
+      return;
+    }
+    setSourceProfile(analyzeSourceAudio(audioBuffer));
+  }, [audioBuffer]);
+
+  useEffect(() => {
+    if (!user) return;
+    supabase
+      .from("sessions")
+      .select("prompt_text, refinement_note, effect_params")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false })
+      .limit(40)
+      .then(({ data }) => {
+        const refs = (data ?? [])
+          .filter((row) => !!row.effect_params)
+          .map((row) => ({
+            prompt: `${row.prompt_text} ${row.refinement_note ?? ""}`.trim(),
+            effectParams: row.effect_params as unknown as EffectParams,
+          }));
+        setHistoryToneRefs(refs);
+      });
+  }, [user]);
 
   const handleFileUpload = useCallback(async (file: File, options?: { preserveSession?: boolean }) => {
     try {
@@ -424,10 +455,19 @@ const Studio = () => {
     setIsGenerating(true);
 
     setTimeout(async () => {
-      const newParams = generationMode === "modify"
+      const parsedParams = generationMode === "modify"
         ? refineParamsFromPrompt(params, prompt)
         : parsePrompt(prompt);
+      const aiResult = applyAiToneStrategy({
+        prompt,
+        startingParams: params,
+        parsedParams,
+        history: historyToneRefs,
+        sourceProfile,
+      });
+      const newParams = aiResult.params;
       setParams(newParams);
+      setAiReasons(aiResult.reasons);
       setIsGenerated(true);
       setIsGenerating(false);
 
@@ -443,15 +483,24 @@ const Studio = () => {
         setIterations([session]);
       }
     }, 600);
-  }, [prompt, isPlaying, saveSession, generationMode, params]);
+  }, [prompt, isPlaying, saveSession, generationMode, params, historyToneRefs, sourceProfile]);
 
   const handleRefine = useCallback(async () => {
     if (!refinementNote.trim() || iterationRound >= 5) return;
     setIsGenerating(true);
 
     setTimeout(async () => {
-      const newParams = refineParamsFromPrompt(params, refinementNote);
+      const parsedParams = refineParamsFromPrompt(params, refinementNote);
+      const aiResult = applyAiToneStrategy({
+        prompt: refinementNote,
+        startingParams: params,
+        parsedParams,
+        history: historyToneRefs,
+        sourceProfile,
+      });
+      const newParams = aiResult.params;
       setParams(newParams);
+      setAiReasons(aiResult.reasons);
       setIsGenerating(false);
 
       const newRound = iterationRound + 1;
@@ -470,7 +519,7 @@ const Studio = () => {
         applyParams(engineRef.current, newParams);
       }
     }, 600);
-  }, [refinementNote, iterationRound, params, prompt, sessionId, isPlaying, saveSession]);
+  }, [refinementNote, iterationRound, params, prompt, sessionId, isPlaying, saveSession, historyToneRefs, sourceProfile]);
 
   const handlePlay = useCallback((mode: "wet" | "dry") => {
     if (!audioBuffer) return;
@@ -656,6 +705,18 @@ const Studio = () => {
                   Modify Existing Chain
                 </button>
               </div>
+              {aiReasons.length > 0 && (
+                <div className="mt-3 rounded-xl border border-primary/30 bg-primary/5 p-3">
+                  <p className="text-[10px] uppercase tracking-wider text-primary font-semibold mb-1">
+                    AI Tone Decisions
+                  </p>
+                  <ul className="text-xs text-primary/90 space-y-1">
+                    {aiReasons.slice(0, 5).map((reason, idx) => (
+                      <li key={`${reason}-${idx}`}>• {reason}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </motion.section>
           )}
         </AnimatePresence>

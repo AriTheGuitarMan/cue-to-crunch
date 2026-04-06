@@ -128,10 +128,10 @@ export function applyParams(engine: AudioEngineState, params: EffectParams) {
   // Distortion
   if (params.distortion > 0) {
     engine.distortion.curve = makeDistortionCurve(params.distortion) as any;
-    engine.distortionGain.gain.setValueAtTime(params.distortion, now);
+    engine.distortionGain.gain.setValueAtTime(1 + params.distortion * 6, now);
   } else {
     engine.distortion.curve = null;
-    engine.distortionGain.gain.setValueAtTime(0, now);
+    engine.distortionGain.gain.setValueAtTime(1, now);
   }
 
   // Reverb
@@ -161,10 +161,10 @@ export function applyParams(engine: AudioEngineState, params: EffectParams) {
   // Overdrive
   if (params.overdrive > 0) {
     engine.overdrive.curve = makeDistortionCurve(params.overdrive * 0.5) as any;
-    engine.overdriveGain.gain.setValueAtTime(params.overdrive, now);
+    engine.overdriveGain.gain.setValueAtTime(1 + params.overdrive * 4, now);
   } else {
     engine.overdrive.curve = null;
-    engine.overdriveGain.gain.setValueAtTime(0, now);
+    engine.overdriveGain.gain.setValueAtTime(1, now);
   }
 
   engine.masterGain.gain.setValueAtTime(params.gain, now);
@@ -179,9 +179,11 @@ export function connectAndPlay(engine: AudioEngineState, params: EffectParams, s
 
   applyParams(engine, params);
 
-  // Signal chain: source -> overdrive -> distortion -> EQ -> compressor -> chorus -> delay -> reverb -> master -> analyser -> output
-  source.connect(engine.overdrive);
-  engine.overdrive.connect(engine.distortion);
+  // Signal chain: source -> overdrive drive gain -> overdrive -> distortion drive gain -> distortion -> EQ -> compressor -> chorus -> delay -> reverb -> master -> analyser -> output
+  source.connect(engine.overdriveGain);
+  engine.overdriveGain.connect(engine.overdrive);
+  engine.overdrive.connect(engine.distortionGain);
+  engine.distortionGain.connect(engine.distortion);
   engine.distortion.connect(engine.eqLow);
   engine.eqLow.connect(engine.eqMid);
   engine.eqMid.connect(engine.eqHigh);
@@ -236,7 +238,9 @@ export function stopPlayback(engine: AudioEngineState) {
   }
   // Disconnect everything to prevent double-connections
   try {
+    engine.overdriveGain.disconnect();
     engine.overdrive.disconnect();
+    engine.distortionGain.disconnect();
     engine.distortion.disconnect();
     engine.eqLow.disconnect();
     engine.eqMid.disconnect();
@@ -303,10 +307,13 @@ export async function renderProcessedBuffer(input: AudioBuffer, params: EffectPa
   const compressor = ctx.createDynamicsCompressor();
   const overdrive = ctx.createWaveShaper();
   overdrive.oversample = "4x";
+  const overdriveGain = ctx.createGain();
+  const distortionGain = ctx.createGain();
   const masterGain = ctx.createGain();
 
   const now = 0;
   distortion.curve = params.distortion > 0 ? makeDistortionCurve(params.distortion) : null;
+  distortionGain.gain.setValueAtTime(params.distortion > 0 ? 1 + params.distortion * 6 : 1, now);
   reverbGain.gain.setValueAtTime(params.reverb, now);
   reverbDry.gain.setValueAtTime(1 - params.reverb * 0.5, now);
   delayNode.delayTime.setValueAtTime(params.delayTime, now);
@@ -322,10 +329,13 @@ export async function renderProcessedBuffer(input: AudioBuffer, params: EffectPa
   compressor.threshold.setValueAtTime(-24 * params.compression, now);
   compressor.ratio.setValueAtTime(1 + params.compression * 11, now);
   overdrive.curve = params.overdrive > 0 ? makeDistortionCurve(params.overdrive * 0.5) : null;
+  overdriveGain.gain.setValueAtTime(params.overdrive > 0 ? 1 + params.overdrive * 4 : 1, now);
   masterGain.gain.setValueAtTime(params.gain, now);
 
-  source.connect(overdrive);
-  overdrive.connect(distortion);
+  source.connect(overdriveGain);
+  overdriveGain.connect(overdrive);
+  overdrive.connect(distortionGain);
+  distortionGain.connect(distortion);
   distortion.connect(eqLow);
   eqLow.connect(eqMid);
   eqMid.connect(eqHigh);
